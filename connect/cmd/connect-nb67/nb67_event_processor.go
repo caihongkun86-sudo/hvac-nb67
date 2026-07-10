@@ -453,15 +453,37 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 		// 条件1：同频电流差 > cpSysCurrentDiffThresh -> 持续cpSysDur
 		isCurrentDiff := f1 == f2 && f1 > 0 && (i1-i2 > cpSysCurrentDiffThresh || i1-i2 < -cpSysCurrentDiffThresh)
 		if p.checkRule(isCurrentDiff, cpSysDur, deviceID, code+"_i", currentTime) {
+			fmt.Printf("[制冷系统预警] %s 触发条件1（电流差异常）\n", name)
+			fmt.Printf("  - 判断值: %s\n", isCurrentDiff)
+			fmt.Printf("  - 参数值: f1=%d, f2=%d, i1=%d, i2=%d, 电流差=%d, 阈值=%d\n", f1, f2, i1, i2, i1-i2, cpSysCurrentDiffThresh)
+			fmt.Printf("  - 触发条件: f1==f2(%v) && f1>0(%v) && |i1-i2|>阈值(%v)\n", f1==f2, f1>0, i1-i2 > cpSysCurrentDiffThresh || i1-i2 < -cpSysCurrentDiffThresh)
 			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3,
 				TriggerConditionSnapshot: csTriggerConditionText("WARN_COOLING_SYSTEM")})
 			return
 		}
 		// 条件2：运行 > 5min 后，过热度异常 -> 持续10分钟（阈值维持硬编码，PHM文档 ±20℃/±8℃）
-		isRunning := f1 > 0 || f2 > 0
+		isRunning := f1 > 0
 		hasBeenRunning := p.checkRule(isRunning, 5*time.Minute, deviceID, code+"_run", currentTime)
-		isSpErr := hasBeenRunning && (sp1 > 200 || sp1 < -80 || sp2 > 200 || sp2 < -80)
+		isSpErr := hasBeenRunning && (sp1 > 200 || sp1 < -80)
 		if p.checkRule(isSpErr, 10*time.Minute, deviceID, code+"_sp", currentTime) {
+			fmt.Printf("[制冷系统预警] %s 触发条件2（过热度异常）\n", name)
+			fmt.Printf("  - 设备ID: %s\n", deviceID)
+			fmt.Printf("  - 参数值: f1=%d, sp1=%d\n", f1, sp1 )
+			fmt.Printf("  - 触发条件: 已运行5分钟(%v) && 过热度异常(%v)\n", hasBeenRunning, isSpErr)
+			fmt.Printf("  - 过热度范围检查: sp1>200(%v), sp1 < -80(%v)\n", sp1>200, sp1 < -80)
+			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3})
+			return
+		}
+		// 条件2扩展：机组2过热度异常检查
+		isRunning2 := f2 > 0
+		hasBeenRunning2 := p.checkRule(isRunning2, 5*time.Minute, deviceID, code+"_run2", currentTime)
+		isSpErr2 := hasBeenRunning2 && (sp2 > 200 || sp2 < -80)
+		if p.checkRule(isSpErr2, 10*time.Minute, deviceID, code+"_sp2", currentTime) {
+			fmt.Printf("[制冷系统预警] %s 触发条件2（过热度异常-机组2）\n", name)
+			fmt.Printf("  - 设备ID: %s\n", deviceID)
+			fmt.Printf("  - 参数值: f2=%d, sp2=%d\n", f2, sp2 )
+			fmt.Printf("  - 触发条件: 已运行5分钟(%v) && 过热度异常(%v)\n", hasBeenRunning2, isSpErr2)
+			fmt.Printf("  - 过热度范围检查: sp2>200(%v), sp2 < -80(%v)\n", sp2>200, sp2 < -80)
 			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3})
 		}
 	}
