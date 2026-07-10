@@ -5,7 +5,7 @@
 export const MONITOR_CONFIG = {
     // 数据自动刷新间隔 (单位: 毫秒)
     // 默认 5000ms (5秒)，可根据服务器负载灵活调整
-    refreshInterval: Number(import.meta.env.VITE_REFRESH_INTERVAL) || 9000,
+    refreshInterval: Number(import.meta.env.VITE_REFRESH_INTERVAL) || 20000,
 
     // 图表自适应防抖延迟
     resizeDebounce: 300,

@@ -14,7 +14,7 @@
                         </el-select>
                     </el-form-item>
                     <el-form-item label="车厢号">
-                        <el-select v-model="filterForm.carriageNo" placeholder="请选择车厢号" class="carriage-select">
+                        <el-select v-model="filterForm.carriageNos" placeholder="请选择车厢号" multiple collapse-tags clearable class="carriage-select" style="width:200px">
                             <el-option v-for="item in carriageList" :key="item.carriage_no" :label="item.label" :value="item.carriage_no" />
                         </el-select>
                     </el-form-item>
@@ -75,10 +75,11 @@
                     <el-table-column prop="unit_name"       label="机组"               width="90"  fixed="left" show-overflow-tooltip />
                     <el-table-column prop="i_inner_temp"    label="室内温度(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_outer_temp"    label="新风温度(℃)"        width="120" show-overflow-tooltip />
-                    <el-table-column prop="i_set_temp"      label="过热度(℃)"          width="120" show-overflow-tooltip />
+                    <el-table-column prop="i_set_temp"      label="设定温度(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_hum"           label="湿度(%)"            width="90"  show-overflow-tooltip />
-                    <el-table-column prop="i_co2"           label="CO₂(ppm)"           width="110" show-overflow-tooltip />
-                    <el-table-column prop="work_status"     label="工作状态"            width="100" show-overflow-tooltip />
+                    <el-table-column prop="work_status"     label="工作状态"            width="100" show-overflow-tooltip >
+                        <template #default="s">{{ getModelName(s.row.work_status) }}</template>
+                    </el-table-column>
                     <el-table-column prop="dwef_op_tm"      label="通风机运行时间(秒)"  width="155" show-overflow-tooltip />
                     <el-table-column prop="w_crnt_cf1"      label="冷凝风机电流1(A)"    width="140" show-overflow-tooltip />
                     <el-table-column prop="w_crnt_cf2"      label="冷凝风机电流2(A)"    width="140" show-overflow-tooltip />
@@ -94,14 +95,19 @@
                     <el-table-column prop="i_low_pres2"     label="低压2(bar)"          width="110" show-overflow-tooltip />
                     <el-table-column prop="i_sat1"          label="送风温度1(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_sat2"          label="送风温度2(℃)"        width="120" show-overflow-tooltip />
-                    <el-table-column prop="dwcf_op_tm1"     label="冷凝运行时间1(秒)"   width="150" show-overflow-tooltip />
-                    <el-table-column prop="dwcf_op_tm2"     label="冷凝运行时间2(秒)"   width="150" show-overflow-tooltip />
+                    <el-table-column prop="dwcf_op_tm1"     label="冷凝运行时间(秒)"   width="150" show-overflow-tooltip />
                     <el-table-column prop="dwcp_op_tm1"     label="压缩机时间1(秒)"     width="135" show-overflow-tooltip />
                     <el-table-column prop="dwcp_op_tm2"     label="压缩机时间2(秒)"     width="135" show-overflow-tooltip />
                     <el-table-column prop="dwexufan_op_tm"  label="废排风机时间(秒)"    width="135" show-overflow-tooltip />
                     <el-table-column prop="dwfad_op_cnt"    label="新风阀开度(%)"       width="120" show-overflow-tooltip />
                     <el-table-column prop="dwrad_op_cnt"    label="回风阀开度(%)"       width="120" show-overflow-tooltip />
                     <el-table-column prop="dmp_exu_pos"     label="废排风阀开度(%)"     width="130" show-overflow-tooltip />
+                    <el-table-column prop="i_sp_u1"     label="过热度1(K)"     width="110" show-overflow-tooltip />
+                    <el-table-column prop="i_sp_u2"     label="过热度2(K)"     width="110" show-overflow-tooltip />
+                    <el-table-column prop="i_co2"           label="CO₂(ppm)"           width="110" show-overflow-tooltip />
+                    <el-table-column prop="i_pm25"          label="PM2.5(ug/m³)"        width="130" show-overflow-tooltip />
+                    <el-table-column prop="i_pm10"          label="PM10(ug/m³)"        width="120" show-overflow-tooltip />
+                    <el-table-column prop="i_tvoc"          label="TVOC(ppb)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="start_station"   label="起始站"              width="110" show-overflow-tooltip>
                         <template #default="s">{{ getStationName(s.row.line_id, s.row.start_station) }}</template>
                     </el-table-column>
@@ -143,6 +149,7 @@ import { ElMessage } from 'element-plus'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import { getStationName } from '@/config/stationMap.js'
+import { getModelName } from '@/config/modelMap.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -151,7 +158,7 @@ const CARRIAGE_MAP = { '1':'TC1','2':'MP1','3':'M1','4':'M2','5':'MP2','6':'TC2'
 
 const filterForm = reactive({
     trainNo: String(parseInt(String(route.query.trainNo || '7001')) || 7001),
-    carriageNo: String(route.query.trainCoach || '1'),
+    carriageNos: route.query.trainCoach ? [String(route.query.trainCoach)] : ['1'],
     unitName: '',
     timeRange: [
         dayjs().subtract(24, 'hour').format('YYYY-MM-DD HH:mm:ss'),
@@ -161,12 +168,12 @@ const filterForm = reactive({
 
 watch(() => route.query, (newQuery) => {
     if (newQuery.trainNo) filterForm.trainNo = String(parseInt(String(newQuery.trainNo)) || 7001)
-    if (newQuery.trainCoach) filterForm.carriageNo = String(newQuery.trainCoach)
+    if (newQuery.trainCoach) filterForm.carriageNos = [String(newQuery.trainCoach)]
     handleQuery()
 }, { deep: true })
 
-const trainList = ref(Array.from({ length: 40 }, (_, i) => ({
-    train_id: (7001 + i).toString(), label: `0${7001 + i}`
+const trainList = ref(Array.from({ length: 37 }, (_, i) => ({
+    train_id: (6001 + i).toString(), label: `0${6001 + i}`
 })))
 const carriageList = ref(Array.from({ length: 6 }, (_, i) => ({
     carriage_no: (i + 1).toString(),
@@ -210,16 +217,21 @@ const fetchDetailData = async () => {
 
     loading.value = true
     try {
-        const carriageStr = String(filterForm.carriageNo).replace(/^0+/, '').padStart(2, '0')
-        const fullCarId = `${filterForm.trainNo}${carriageStr}`
+        const carriageNos = filterForm.carriageNos || []
+        
+        // 如果没有选择车厢，查询所有车厢
+        const targetCarriages = carriageNos.length > 0 ? carriageNos : ['1', '2', '3', '4', '5', '6']
+        
         const res = await getTrainDataApi({
-            state: fullCarId,
+            state: `${filterForm.trainNo}01`, // 用于解析 trainId
+            carriageIds: targetCarriages.join(','), // 传递多车厢参数（逗号分隔）
             startTime: filterForm.timeRange[0],
             endTime: filterForm.timeRange[1],
             unitName: filterForm.unitName || '',
             page: detailPage.value,
             limit: detailPageSize.value
         })
+        
         if (res?.data) {
             detailList.value = res.data.list || []
             detailTotal.value = res.data.total || 0
@@ -236,7 +248,7 @@ const fetchDetailData = async () => {
 
 const CSV_HEADERS = [
     '序号','列车号','车厢','机组',
-    '室内温度(℃)','新风温度(℃)','设定温度(℃)','湿度(%)','CO₂(ppm)',
+    '室内温度(℃)','新风温度(℃)','设定温度(℃)','湿度(%)',
     '工作状态','通风机运行时间(秒)',
     '冷凝风机电流1(A)','冷凝风机电流2(A)',
     '压缩机电流1(A)','压缩机电流2(A)',
@@ -244,10 +256,12 @@ const CSV_HEADERS = [
     '送风机电流1(A)','送风机电流2(A)',
     '高压1(bar)','低压1(bar)','高压2(bar)','低压2(bar)',
     '送风温度1(℃)','送风温度2(℃)',
-    '冷凝运行时间1(秒)','冷凝运行时间2(秒)',
+    '冷凝运行时间(秒)',
     '压缩机时间1(秒)','压缩机时间2(秒)',
     '废排风机时间(秒)','新风阀开度(%)','回风阀开度(%)',
-    '废排风阀开度(%)','起始站','终点站','当前站','下一站',
+    '废排风阀开度(%)','过热度1(K)','过热度2(K)',
+    'CO₂(ppm)','PM2.5(ug/m³)','PM10(ug/m³)','TVOC(ppb)',
+    '起始站','终点站','当前站','下一站',
     '设备上报时间'
 ]
 
@@ -256,15 +270,16 @@ const rowToCsv = (row, idx) => {
         idx+1, row.train_id ? `0${row.train_id}` : '',
         CARRIAGE_MAP[String(row.carriage_id)] || row.carriage_id,
         row.unit_name,
-        row.i_inner_temp, row.i_outer_temp, row.i_set_temp, row.i_hum, row.i_co2,
-        row.work_status, row.dwef_op_tm,
+        row.i_inner_temp, row.i_outer_temp, row.i_set_temp, row.i_hum,
+        getModelName(row.work_status), row.dwef_op_tm,
         row.w_crnt_cf1, row.w_crnt_cf2, row.w_crnt_cp1, row.w_crnt_cp2,
         row.w_freq_cp1, row.w_freq_cp2, row.w_crnt_ef1, row.w_crnt_ef2,
         row.i_high_pres1, row.i_low_pres1, row.i_high_pres2, row.i_low_pres2,
         row.i_sat1, row.i_sat2,
-        row.dwcf_op_tm1, row.dwcf_op_tm2, row.dwcp_op_tm1, row.dwcp_op_tm2,
+        row.dwcf_op_tm1, row.dwcp_op_tm1, row.dwcp_op_tm2,
         row.dwexufan_op_tm, row.dwfad_op_cnt, row.dwrad_op_cnt,
-        row.dmp_exu_pos,
+        row.dmp_exu_pos, row.i_sp_u1, row.i_sp_u2,
+        row.i_co2, row.i_pm25, row.i_pm10, row.i_tvoc,
         getStationName(row.line_id, row.start_station),
         getStationName(row.line_id, row.terminal_station),
         getStationName(row.line_id, row.cur_station),
@@ -285,26 +300,39 @@ const handleDownload = async () => {
 
     downloading.value = true
     try {
-        const carriageStr = String(filterForm.carriageNo).replace(/^0+/, '').padStart(2, '0')
-        const fullCarId = `${filterForm.trainNo}${carriageStr}`
+        const carriageNos = filterForm.carriageNos || []
+        const targetCarriages = carriageNos.length > 0 ? carriageNos : ['1', '2', '3', '4', '5', '6']
+        
         let page = 1; let allRows = []
+        
         while (true) {
             const res = await getTrainDataApi({
-                state: fullCarId,
+                state: `${filterForm.trainNo}01`,
+                carriageIds: targetCarriages.join(','),
                 startTime: filterForm.timeRange[0],
                 endTime: filterForm.timeRange[1],
                 unitName: filterForm.unitName || '',
                 page, limit: 500
             })
+            
             const batch = res?.data?.list || []
             allRows = allRows.concat(batch)
+            
             if (allRows.length >= (res?.data?.total || 0) || batch.length < 500 || page >= 20) break
             page++
         }
+        
         if (allRows.length === 0) { ElMessage.warning('暂无数据'); return }
+        
         const csv = '﻿' + CSV_HEADERS.join(',') + '\n' + allRows.map(rowToCsv).join('\n')
         const zip = new JSZip()
-        const fname = `历史数据_0${filterForm.trainNo}_${CARRIAGE_MAP[filterForm.carriageNo]||filterForm.carriageNo}_${dayjs().format('YYYYMMDD')}.csv`
+        
+        // 文件名显示选择的车厢范围
+        const carriageLabel = carriageNos.length > 0 
+            ? carriageNos.map(c => CARRIAGE_MAP[c] || c).join('-')
+            : '全部车厢'
+        const fname = `历史数据_0${filterForm.trainNo}_${carriageLabel}_${dayjs().format('YYYYMMDD')}.csv`
+        
         zip.file(fname, csv)
         const blob = await zip.generateAsync({ type:'blob', compression:'DEFLATE', compressionOptions:{level:6} })
         saveAs(blob, fname.replace('.csv', '.zip'))
@@ -317,7 +345,7 @@ const handleDownload = async () => {
 }
 
 const goBack = () => {
-    router.push({ name: 'trainInfo', query: { trainNo: String(filterForm.trainNo).padStart(5, '0'), trainCoach: filterForm.carriageNo } })
+    router.push({ name: 'trainInfo', query: { trainNo: String(filterForm.trainNo).padStart(5, '0'), trainCoach: filterForm.carriageNos?.[0] || '1' } })
 }
 
 onMounted(() => {

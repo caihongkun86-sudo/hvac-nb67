@@ -59,9 +59,9 @@ const rows = [
     { label: '压缩机2', key: 'comp_u2', isStatus: true },
     { label: '通风机',  key: 'ef',      isStatus: true },
     { label: '冷凝风机', key: 'cf',     isStatus: true },
-    { label: '新风阀',  key: 'fadpos',  suffix: '%' },
-    { label: '回风阀',  key: 'radpos',  suffix: '%' },
-    { label: '废排风阀', key: 'dmp_exu_pos', suffix: '%', isGlobal: true },
+    { label: '新风阀',  key: 'fadpos', suffix1: '%', suffix2: 's', isGlobal: true, multiplier: 0.35 },
+    { label: '回风阀',  key: 'radpos', suffix1: '%', suffix2: 's', isGlobal: true, multiplier: 0.35 },
+    { label: '废排风阀', key: 'dmp_exu_pos', suffix1: '%', suffix2: 's', isGlobal: true, multiplier: 0.35 },
     // 空气质量6行（来自示意图右上角，需求2迁移至此）
     { label: 'CO₂',    key: 'aq_co2',   suffix: 'ppm', isAQ: true },
     { label: 'TVOC',   key: 'aq_tvoc',  suffix: 'ppb', isAQ: true },
@@ -93,31 +93,69 @@ const getVal = (carIdx, pos, row) => {
     const findKeyInObj = (base) => {
         const toPascal = (s) => s.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
         const pBase = toPascal(base);
+        
+        // 生成所有可能的字段名格式
         const possible = [
-            base,
-            base.toLowerCase(),
-            pBase,
-            `Cfbk${pBase}`,
-            `cfbk_${base}`.toLowerCase(),
-            `cfbk_${base}`.toUpperCase()
+            base,                          // ef_u1
+            base.toLowerCase(),            // ef_u1
+            pBase,                         // EfU1
+            `Cfbk${pBase}`,                // CfbkEfU1
+            `Cfbk${pBase}1`,               // CfbkEfU11 (状态字段通常带11/12后缀)
+            `Cfbk${pBase}2`,               // CfbkEfU12
+            `cfbk_${base}`.toLowerCase(),  // cfbk_ef_u1
+            `cfbk_${base}1`.toLowerCase(), // cfbk_ef_u11
+            `cfbk_${base}2`.toLowerCase(), // cfbk_ef_u12
+            `cfbk_${base}`.toUpperCase()   // CFBK_EF_U1
         ];
+        
+        // 第一阶段：精确匹配
         for (const k of possible) {
-            if (carData[k] !== undefined) return k;
+            if (carData[k] !== undefined) {
+                return k;
+            }
         }
-        // 模糊匹配：忽略下划线并转小写进行包含测试；优先选择 Cfbk* 前缀的运行反馈字段
+        
+        // 第二阶段：模糊匹配，优先选择 Cfbk 前缀的运行状态字段
         const flatBase = base.toLowerCase().replace(/_/g, '');
-        const keys = Object.keys(carData);
-        const matches = keys.filter(k => k.toLowerCase().replace(/_/g, '').includes(flatBase));
-        return matches.find(k => k.startsWith('Cfbk'))
-            || matches.find(k => k.toLowerCase().startsWith('cfbk_'))
-            || matches[0];
+        const matchedFields = Object.keys(carData).filter(k => 
+            k.toLowerCase().replace(/_/g, '').includes(flatBase)
+        );
+        
+        if (matchedFields.length > 0) {
+            // 优先选择 Cfbk 前缀的字段（运行状态）
+            const cfbkField = matchedFields.find(k => k.startsWith('Cfbk'));
+            if (cfbkField) {
+                return cfbkField;
+            }
+            // 其次选择小写 cfbk_ 前缀的字段
+            const cfbkLowerField = matchedFields.find(k => k.startsWith('cfbk_'));
+            if (cfbkLowerField) {
+                return cfbkLowerField;
+            }
+            // 最后返回第一个匹配的字段
+            return matchedFields[0];
+        }
+        
+        return undefined;
     };
 
     if (row.isGlobal) {
         // 全局型：直接用 key 查找，不附加 _u${unitIdx}（如废排风阀，一车一个传感器）
         const key = findKeyInObj(row.key)
-        const num = carData[key]
-        return num !== undefined && num !== null ? `${num}${row.suffix}` : '-'
+        const originalNum = carData[key]
+        if (originalNum !== undefined && originalNum !== null) {
+            if (row.multiplier && row.suffix1 && row.suffix2) {
+                // 同时显示原始值和换算后的值（如：70%(200s)）
+                const convertedNum = Math.ceil(Number(originalNum) * row.multiplier)
+                return `${originalNum}${row.suffix1} (${convertedNum}${row.suffix2})`
+            }
+            // 如果有 multiplier，进行乘法运算
+            if (row.multiplier) {
+                return `${Math.ceil(Number(originalNum) * row.multiplier)}${row.suffix}`
+            }
+            return `${originalNum}${row.suffix}`
+        }
+        return '-'
     } else if (row.isAQ) {
         // 空气质量类：每列只取机组1的值（每车厢一个传感器，U1/U2取平均或取U1）
         // key 格式：aq_co2 → AqCo2U1 / AqCo2U2
@@ -135,30 +173,7 @@ const getVal = (carIdx, pos, row) => {
         const displayVal = needsScale ? (Number(val) / 10).toFixed(1) : val
         return `${displayVal}${row.suffix}`
     } else if (row.isStatus) {
-        const isRunVal = (v) => v != null && (v == 1 || v === true || String(v).toLowerCase() === 'true')
-
-        // 通风机/冷凝风机：同机组下有两台风机（后缀 1/2），任一运行即显示"运行"
-        if (row.key === 'ef' || row.key === 'cf') {
-            const head = row.key === 'ef' ? 'Ef' : 'Cf'
-            const candidates = [
-                `Cfbk${head}U${unitIdx}1`,            // CfbkEfU11
-                `Cfbk${head}U${unitIdx}2`,            // CfbkEfU12
-                `cfbk_${row.key}_u${unitIdx}1`,       // cfbk_ef_u11
-                `cfbk_${row.key}_u${unitIdx}2`,       // cfbk_ef_u12
-                `CFBK_${row.key.toUpperCase()}_U${unitIdx}1`,
-                `CFBK_${row.key.toUpperCase()}_U${unitIdx}2`,
-            ]
-            const vals = candidates.map(k => carData[k]).filter(v => v !== undefined && v !== null)
-            if (vals.length === 0) {
-                const fallbackKey = findKeyInObj(`${row.key}_u${unitIdx}`)
-                const v = carData[fallbackKey]
-                if (v === undefined || v === null) return '-'
-                return isRunVal(v) ? '运行' : '停机'
-            }
-            return vals.some(isRunVal) ? '运行' : '停机'
-        }
-
-        // 压缩机：保留原有 comp_u11/comp_u21 拼装
+        // 状态类：构造基础 Key
         let baseKey = row.key.startsWith('comp_u')
             ? `comp_u${unitIdx}${row.key.slice(-1)}`
             : `${row.key}_u${unitIdx}`;
@@ -167,7 +182,9 @@ const getVal = (carIdx, pos, row) => {
         const val = carData[key];
 
         if (val === undefined || val === null) return '-'
-        return isRunVal(val) ? '运行' : '停机'
+        // 允许数字 1, 布尔值 true, 字符串 "true" (忽略大小写)
+        const isRun = val == 1 || val === true || String(val).toLowerCase() === 'true';
+        return isRun ? '运行' : '停机'
     } else {
         // 数值类：如新风阀、回风阀
         const key = findKeyInObj(`${row.key}_u${unitIdx}`);

@@ -586,6 +586,7 @@ export class StatusRepository {
     static async getRawHistory(params: {
         trainId?: number | undefined;
         carriageId?: number | undefined;
+        carriageIds?: number[] | undefined;
         startTime: string;
         endTime: string;
         page: number;
@@ -601,7 +602,11 @@ export class StatusRepository {
         if (params.trainId) {
             baseQuery = baseQuery.where('train_id', '=', params.trainId);
         }
-        if (params.carriageId) {
+
+        // 优先使用 carriageIds 数组（多车厢查询），兼容旧的 carriageId 单值参数
+        if (params.carriageIds && params.carriageIds.length > 0) {
+            baseQuery = baseQuery.where('carriage_id', 'in', params.carriageIds);
+        } else if (params.carriageId) {
             baseQuery = baseQuery.where('carriage_id', '=', params.carriageId);
         }
 

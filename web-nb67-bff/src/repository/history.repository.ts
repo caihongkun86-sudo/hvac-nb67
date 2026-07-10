@@ -162,8 +162,8 @@ export class HistoryRepository {
             22: ['i_cp_u11', 'i_cp_u12', 'fas_u1'],
             23: ['i_cp_u21', 'i_cp_u22', 'fas_u2'],                            // 机组2压缩机电流
             24: ['i_cp_u21', 'i_cp_u22', 'fas_u2'],
-            25: ['aq_co2_u1', 'aq_pm2_5_u1', 'aq_tvoc_u1'],                   // 机组1空气质量
-            26: ['aq_co2_u2', 'aq_pm2_5_u2', 'aq_tvoc_u2'],                   // 机组2空气质量
+            25: ['aq_co2_u1', 'aq_pm2_5_u1', 'aq_pm10_u1', 'aq_sp_u1', 'aq_tvoc_u1'],                   // 机组1空气质量
+            26: ['aq_co2_u2', 'aq_pm2_5_u2', 'aq_pm10_u2', 'aq_sp_u2', 'aq_tvoc_u2'],                   // 机组2空气质量
         };
 
         let params: string[];

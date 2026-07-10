@@ -13,7 +13,7 @@
                         </el-select>
                     </el-form-item>
                     <el-form-item label="车厢">
-                        <el-select v-model="filterForm.carriageNo" placeholder="全部" clearable style="width:120px">
+                        <el-select v-model="filterForm.carriageNos" placeholder="全部" multiple collapse-tags clearable style="width:200px">
                             <el-option v-for="item in carriageList" :key="item.carriage_no" :label="item.label" :value="item.carriage_no" />
                         </el-select>
                     </el-form-item>
@@ -128,7 +128,7 @@ const shortcuts = [
 
 const filterForm = reactive({
     trainNo:    String(route.query.trainNo || '7001'),
-    carriageNo: String(route.query.trainCoach || ''),
+    carriageNos: route.query.trainCoach ? [String(route.query.trainCoach)] : [],
     unitName:   '',
     timeRange: [
         dayjs().subtract(7,'day').startOf('day').format('YYYY-MM-DD HH:mm:ss'),
@@ -136,7 +136,7 @@ const filterForm = reactive({
     ]
 })
 
-const trainList    = ref(Array.from({ length: 40 }, (_, i) => ({ train_id:(7001+i).toString(), label:`0${7001+i}` })))
+const trainList    = ref(Array.from({ length: 37 }, (_, i) => ({ train_id:(6001+i).toString(), label:`0${6001+i}` })))
 const carriageList = ref(Array.from({ length: 6  }, (_, i) => ({ carriage_no:(i+1).toString(), label: CARRIAGE_MAP[String(i+1)] })))
 
 const loading     = ref(false)
@@ -150,9 +150,10 @@ const handleQuery = () => { currentPage.value = 1; fetchData() }
 const fetchData = async () => {
     loading.value = true
     try {
+        const carriageNos = filterForm.carriageNos || []
         const res = await getHistoryWarning({
             trainNo: filterForm.trainNo,
-            carriageNos: filterForm.carriageNo ? [filterForm.carriageNo] : undefined,
+            carriageNos: carriageNos.length > 0 ? carriageNos : undefined,
             unitNames: filterForm.unitName ? [filterForm.unitName] : [],
             startTime: filterForm.timeRange?.[0] || '',
             endTime:   filterForm.timeRange?.[1] || '',
@@ -173,9 +174,10 @@ const fetchData = async () => {
 }
 
 const handleExport = () => {
+    const carriageNos = filterForm.carriageNos || []
     const url = getWarningExportUrl({
         trainNo: filterForm.trainNo,
-        carriageNos: filterForm.carriageNo || '',
+        carriageNos: carriageNos.join(',') || '',
         unitNames: filterForm.unitName || '',
         startTime: filterForm.timeRange?.[0] || '',
         endTime:   filterForm.timeRange?.[1] || '',
@@ -267,11 +269,11 @@ onUnmounted(() => {
     if (detailChart) { detailChart.dispose(); detailChart = null }
 })
 
-const goBack = () => router.push({ name:'trainInfo', query:{ trainNo: filterForm.trainNo, trainCoach: filterForm.carriageNo || '1' } })
+const goBack = () => router.push({ name:'trainInfo', query:{ trainNo: filterForm.trainNo, trainCoach: filterForm.carriageNos?.[0] || '1' } })
 
 const gotoWarningConfig = () => router.push({
     name: 'warningConfig',
-    query: { trainNo: filterForm.trainNo, trainCoach: filterForm.carriageNo || '1' }
+    query: { trainNo: filterForm.trainNo, trainCoach: filterForm.carriageNos?.[0] || '1' }
 })
 onMounted(() => fetchData())
 </script>

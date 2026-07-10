@@ -368,13 +368,34 @@ async function bootstrap() {
         // 历史数据接口 (适配 HistoryData 页面)
         // 每条 DB 记录按机组一/机组二拆成两行输出
         fastify.get('/api/getTrainData', async (request: any) => {
-            const { state, startTime, endTime, page = 1, limit = 50, unitName = '' } = request.query;
+            const { state, carriageIds, startTime, endTime, page = 1, limit = 50, unitName = '' } = request.query;
+
+            // 解析 trainId（从 state 参数或默认）
             const trainId = state ? parseInt(String(state).slice(0, -2)) : undefined;
+
+            // 解析 carriageId（兼容旧的 state 参数）
             const carriageId = state ? parseInt(String(state).slice(-2)) : undefined;
+
+            // 解析 carriageIds 数组参数（支持多车厢查询）
+            let parsedCarriageIds: number[] | undefined;
+            if (carriageIds) {
+                if (Array.isArray(carriageIds)) {
+                    parsedCarriageIds = carriageIds
+                        .map((c: any) => parseInt(String(c)))
+                        .filter((c: number) => !isNaN(c));
+                } else {
+                    // 处理逗号分隔的字符串
+                    const ids = String(carriageIds).split(',');
+                    parsedCarriageIds = ids
+                        .map((c: string) => parseInt(c.trim()))
+                        .filter((c: number) => !isNaN(c));
+                }
+            }
 
             const result = await StatusRepository.getRawHistory({
                 trainId,
                 carriageId,
+                carriageIds: parsedCarriageIds.length > 0 ? parsedCarriageIds : undefined,
                 startTime: String(startTime || ''),
                 endTime: String(endTime || ''),
                 page: parseInt(page as string),
@@ -401,11 +422,16 @@ async function bootstrap() {
                             event_time: formatTime(row.event_time),
                             unit_name: '机组一',
 
-                            i_inner_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
+                            i_inner_temp: raw.Tveh1 !== undefined ? (Number(raw.Tveh1) / 10).toFixed(1) : '',
                             i_outer_temp: raw.FasU1 !== undefined ? (Number(raw.FasU1) / 10).toFixed(1) : '',
-                            i_set_temp: raw.SpU11 !== undefined ? (Number(raw.SpU11) / 10).toFixed(1) : '',
-                            i_hum: raw.Humdity1 !== undefined ? (Number(raw.Humdity1) / 10).toFixed(1) : '',
+                            i_set_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
+                            i_hum: raw.AqHU1 !== undefined ? (Number(raw.AqHU1) / 10).toFixed(1) : '',
+                            i_sp_u1: raw.SpU11 !== undefined ? (Number(raw.SpU11) / 10).toFixed(1) : '',
+                            i_sp_u2: raw.SpU12 !== undefined ? (Number(raw.SpU12) / 10).toFixed(1) : '', 
                             i_co2: raw.AqCo2U1 ?? '',
+                            i_pm25: raw.AqPm25U1 ?? '',
+                            i_pm10: raw.AqPm10U1 ?? '',
+                            i_tvoc: raw.AqTvocU1 ?? '',
                             work_status: raw.WmodeU1 ?? '',
 
                             dwef_op_tm: raw.DwefOpTmU11 ?? '',
@@ -450,11 +476,16 @@ async function bootstrap() {
                             event_time: formatTime(row.event_time),
                             unit_name: '机组二',
 
-                            i_inner_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
+                            i_inner_temp: raw.Tveh2 !== undefined ? (Number(raw.Tveh2) / 10).toFixed(1) : '',
                             i_outer_temp: raw.FasU2 !== undefined ? (Number(raw.FasU2) / 10).toFixed(1) : '',
-                            i_set_temp: raw.SpU21 !== undefined ? (Number(raw.SpU21) / 10).toFixed(1) : '',
-                            i_hum: raw.Humdity2 !== undefined ? (Number(raw.Humdity2) / 10).toFixed(1) : '',
+                            i_set_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
+                            i_sp_u1: raw.SpU21 !== undefined ? (Number(raw.SpU21) / 10).toFixed(1) : '',
+                            i_sp_u2: raw.SpU22 !== undefined ? (Number(raw.SpU22) / 10).toFixed(1) : '', 
+                            i_hum: raw.AqHU2 !== undefined ? (Number(raw.AqHU2) / 10).toFixed(1) : '',
                             i_co2: raw.AqCo2U2 ?? '',
+                            i_pm25: raw.AqPm25U2 ?? '',
+                            i_pm10: raw.AqPm10U2 ?? '',
+                            i_tvoc: raw.AqTvocU2 ?? '',
                             work_status: raw.WmodeU2 ?? '',
 
                             dwef_op_tm: raw.DwefOpTmU21 ?? '',

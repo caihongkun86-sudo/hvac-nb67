@@ -12,7 +12,7 @@
                         </el-select>
                     </el-form-item>
                     <el-form-item label="车厢">
-                        <el-select v-model="filterForm.carriageNo" placeholder="全部" clearable class="carriage-select" style="width:120px">
+                        <el-select v-model="filterForm.carriageNos" placeholder="全部车厢" multiple collapse-tags clearable class="carriage-select" style="width:200px">
                             <el-option v-for="item in carriageList" :key="item.carriage_no" :label="item.label" :value="item.carriage_no" />
                         </el-select>
                     </el-form-item>
@@ -121,7 +121,7 @@ const getInitialFilter = () => {
 
     return {
         trainNo:    String(qTrain || cached?.trainNo || '7001'),
-        carriageNo: String(qCoach || cached?.carriageNo || ''),
+        carriageNos: Array.isArray(qCoach) ? qCoach : (qCoach ? [String(qCoach)] : (cached?.carriageNos || [])),
         unitName:   '',
         timeRange: [
             dayjs().subtract(7, 'day').startOf('day').format('YYYY-MM-DD HH:mm:ss'),
@@ -143,8 +143,10 @@ watch(
     (newVals, oldVals) => {
         if (!oldVals) return
         if (newVals[0] !== oldVals[0] || newVals[1] !== oldVals[1]) {
-            if (newVals[0]) filterForm.trainNo    = String(newVals[0])
-            if (newVals[1]) filterForm.carriageNo = String(newVals[1])
+            if (newVals[0]) filterForm.trainNo = String(newVals[0])
+            if (newVals[1]) {
+                filterForm.carriageNos = Array.isArray(newVals[1]) ? newVals[1] : [String(newVals[1])]
+            }
             handleQuery()
         }
     }
@@ -171,7 +173,7 @@ const getCarriageName = (no) => {
 }
 
 const CARRIAGE_MAP = { '1':'TC1','2':'MP1','3':'M1','4':'M2','5':'MP2','6':'TC2' }
-const trainList    = ref(Array.from({ length: 40 }, (_, i) => ({ train_id: (7001 + i).toString(), label: `0${7001 + i}` })))
+const trainList    = ref(Array.from({ length: 37 }, (_, i) => ({ train_id: (6001 + i).toString(), label: `0${6001 + i}` })))
 const carriageList = ref(Array.from({ length: 6  }, (_, i) => ({ carriage_no: (i + 1).toString(), label: CARRIAGE_MAP[String(i+1)] })))
 
 const loading     = ref(false)
@@ -194,13 +196,13 @@ const fetchData = async (p, l) => {
     // 直接读取 DatePicker 当前值，不做任何修改
     const startTime = filterForm.timeRange?.[0] || ''
     const endTime   = filterForm.timeRange?.[1] || ''
-    // 多选车厢：排除 'all'
-    console.log(`[HistoryAlarm] req#${reqId} start`, { trainNo: filterForm.trainNo, carriageNo: filterForm.carriageNo, startTime, endTime, page, limit })
+    // 多选车厢：如果数组为空，则不传该参数（查询全部车厢）
+    console.log(`[HistoryAlarm] req#${reqId} start`, { trainNo: filterForm.trainNo, carriageNos: filterForm.carriageNos, startTime, endTime, page, limit })
 
     try {
         const res = await getAlarmInformation({
             trainNo: filterForm.trainNo,
-            carriageNos: filterForm.carriageNo ? [filterForm.carriageNo] : undefined,
+            carriageNos: filterForm.carriageNos && filterForm.carriageNos.length > 0 ? filterForm.carriageNos : undefined,
             unitNames: filterForm.unitName ? [filterForm.unitName] : [],
             startTime, endTime, page, limit
         })
@@ -268,7 +270,7 @@ const handleCurrentChange = (val) => {
 const handleExport = () => {
     const params = {
         trainNo: filterForm.trainNo,
-        carriageNos: filterForm.carriageNo || '',
+        carriageNos: filterForm.carriageNos && filterForm.carriageNos.length > 0 ? filterForm.carriageNos.join(',') : '',
         unitNames: filterForm.unitName || '',
         startTime: filterForm.timeRange?.[0] || '',
         endTime:   filterForm.timeRange?.[1] || '',
@@ -279,7 +281,7 @@ const handleExport = () => {
 
 const goBack = () => router.push({
     name: 'trainInfo',
-    query: { trainNo: filterForm.trainNo, trainCoach: filterForm.carriageNo || '1' }
+    query: { trainNo: filterForm.trainNo, trainCoach: filterForm.carriageNos?.[0] || '1' }
 })
 
 onMounted(() => handleQuery())

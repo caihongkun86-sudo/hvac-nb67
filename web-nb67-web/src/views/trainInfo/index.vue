@@ -116,10 +116,10 @@ const fullCarriageId = computed(() => {
 })
 
 
-// 生成车号列表 (7001 - 7040)
-const trainList = ref(Array.from({ length: 40 }, (_, i) => ({
-    train_id: (7001 + i).toString(),
-    label: `0${7001 + i}`
+// 生成车号列表 (6001 - 6037)
+const trainList = ref(Array.from({ length: 37 }, (_, i) => ({
+    train_id: (6001 + i).toString(),
+    label: `0${6001 + i}`
 })))
 
 // 生成车厢号列表 (TC1/MP1/M1/M2/MP2/TC2)
