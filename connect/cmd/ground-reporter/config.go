@@ -35,6 +35,12 @@ type Config struct {
 	// 空字符串 = 不启用 DB 恢复（保留原 in-memory 行为）。
 	PGDSN string
 
+	// 批量发送配置（减少 HTTP 调用频率）
+	// BatchSize: 累积多少条记录后发送，0 或 1 表示不启用批量
+	// FlushIntervalMs: 超时自动发送（毫秒），0 表示不启用超时
+	BatchSize         int
+	FlushIntervalMs   int
+
 	LogLevel string
 }
 
@@ -59,6 +65,10 @@ func loadConfig() Config {
 		KafkaBrokers: splitCSV(getEnv("KAFKA_BROKERS", "redpanda-1:9092,redpanda-2:9092,redpanda-3:9092")),
 
 		PGDSN: getEnv("PG_DSN", ""),
+
+		// 批量发送配置
+		BatchSize:       getEnvInt("BATCH_SIZE", 50),
+		FlushIntervalMs: getEnvInt("FLUSH_INTERVAL_MS", 5000),
 
 		LogLevel: getEnv("LOG_LEVEL", "INFO"),
 	}

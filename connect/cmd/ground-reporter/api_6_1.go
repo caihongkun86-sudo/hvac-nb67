@@ -68,7 +68,7 @@ func Handle61Alarm(ctx context.Context, client *PlatformClient, tracker *AlarmTr
 }
 
 // Handle61Predict processes a signal-predict message the same way as alarm.
-func Handle61Predict(ctx context.Context, client *PlatformClient, tracker *AlarmTracker, sc *StationCache, cfg Config, data []byte) {
+func Handle61Predict(ctx context.Context, batchSender *BatchSender, tracker *AlarmTracker, sc *StationCache, cfg Config, data []byte) {
 	var msg SubEventMsg
 	if err := json.Unmarshal(data, &msg); err != nil {
 		log.Printf("[WARN] 6.1 predict: bad json: %v", err)
@@ -124,19 +124,28 @@ func Handle61Predict(ctx context.Context, client *PlatformClient, tracker *Alarm
 	// 发送前打印完整请求信息
 	log.Printf("[PREDICT-SEND] device=%s, carriage=%d, train=%d, records=%d, url=%s", 
 		msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, msg.EventMeta.TrainID, len(records), cfg.FaultRecordURL)
-	// 打印完整的 JSON 请求体
-	if jsonData, err := json.MarshalIndent(records, "", "  "); err == nil {
-		log.Printf("[PREDICT-BODY] %s", string(jsonData))
-	} else {
-		log.Printf("[WARN] 6.1 predict: failed to marshal records: %v", err)
+	// 打印完整的 JSON 请求体（仅 DEBUG 模式）
+	if cfg.LogLevel == "DEBUG" {
+		if jsonData, err := json.MarshalIndent(records, "", "  "); err == nil {
+			log.Printf("[PREDICT-BODY] %s", string(jsonData))
+		} else {
+			log.Printf("[WARN] 6.1 predict: failed to marshal records: %v", err)
+		}
 	}
 
-	if err := client.PostJSON(ctx, cfg.FaultRecordURL, records); err != nil {
-		log.Printf("[ERROR] 6.1 predict POST failed: device=%s, carriage=%d, error=%v", 
-			msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, err)
+	// 使用批量发送器发送
+	if batchSender != nil {
+		batchSender.Add(records)
 	} else {
-		log.Printf("[SUCCESS] 6.1 predict POST success: device=%s, carriage=%d, records=%d", 
-			msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, len(records))
+		// 兼容不启用批量的情况，直接发送
+		client := newPlatformClient(cfg)
+		if err := client.PostJSON(ctx, cfg.FaultRecordURL, records); err != nil {
+			log.Printf("[ERROR] 6.1 predict POST failed: device=%s, carriage=%d, error=%v", 
+				msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, err)
+		} else {
+			log.Printf("[SUCCESS] 6.1 predict POST success: device=%s, carriage=%d, records=%d", 
+				msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, len(records))
+		}
 	}
 }
 

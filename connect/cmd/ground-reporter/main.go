@@ -23,6 +23,9 @@ func main() {
 	lifeCache := newLifeCache()
 	stationCache := newStationCache()
 
+	// 初始化批量发送器
+	batchSender := newBatchSender(client, cfg)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
@@ -40,12 +43,17 @@ func main() {
 		}
 	}
 
+	// 启动批量发送器
+	if batchSender != nil {
+		batchSender.Start()
+	}
+
 	// --- 6.1: signal-predict ---
 	wg.Add(1)
 	go consumeTopic(ctx, &wg, cfg.KafkaBrokers,
 		"signal-predict", "ground-reporter-predict",
 		func(data []byte) {
-			Handle61Predict(ctx, client, tracker, stationCache, cfg, data)
+			Handle61Predict(ctx, batchSender, tracker, stationCache, cfg, data)
 		},
 	)
 
@@ -95,6 +103,12 @@ func main() {
 	<-quit
 
 	log.Printf("[INFO] ground-reporter shutting down...")
+	
+	// 停止批量发送器，等待剩余记录发送完成
+	if batchSender != nil {
+		batchSender.Stop()
+	}
+	
 	cancel()
 	wg.Wait()
 	log.Printf("[INFO] ground-reporter stopped")

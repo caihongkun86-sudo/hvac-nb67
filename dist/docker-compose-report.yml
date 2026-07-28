@@ -26,6 +26,11 @@ services:
       - HEARTBEAT_INTERVAL_MIN=1
       - DAILY_BATCH_HOUR=0
       - LOG_LEVEL=INFO
+      # 批量发送配置：减少 HTTP 调用频率，避免消息量大时阻塞消费
+      # BATCH_SIZE: 累积多少条记录后发送（默认 50，设为 1 禁用批量）
+      # FLUSH_INTERVAL_MS: 超时自动发送（默认 5000ms）
+      - BATCH_SIZE=50
+      - FLUSH_INTERVAL_MS=5000
     depends_on:
       mock-platform:
         condition: service_healthy
