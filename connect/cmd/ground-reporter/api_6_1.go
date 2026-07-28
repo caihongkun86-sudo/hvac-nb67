@@ -120,8 +120,23 @@ func Handle61Predict(ctx context.Context, client *PlatformClient, tracker *Alarm
 	if len(records) == 0 {
 		return
 	}
+	
+	// 发送前打印完整请求信息
+	log.Printf("[PREDICT-SEND] device=%s, carriage=%d, train=%d, records=%d, url=%s", 
+		msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, msg.EventMeta.TrainID, len(records), cfg.FaultRecordURL)
+	// 打印完整的 JSON 请求体
+	if jsonData, err := json.MarshalIndent(records, "", "  "); err == nil {
+		log.Printf("[PREDICT-BODY] %s", string(jsonData))
+	} else {
+		log.Printf("[WARN] 6.1 predict: failed to marshal records: %v", err)
+	}
+
 	if err := client.PostJSON(ctx, cfg.FaultRecordURL, records); err != nil {
-		log.Printf("[ERROR] 6.1 predict POST failed: %v", err)
+		log.Printf("[ERROR] 6.1 predict POST failed: device=%s, carriage=%d, error=%v", 
+			msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, err)
+	} else {
+		log.Printf("[SUCCESS] 6.1 predict POST success: device=%s, carriage=%d, records=%d", 
+			msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, len(records))
 	}
 }
 
