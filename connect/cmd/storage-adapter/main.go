@@ -27,6 +27,10 @@ func main() {
 		log.Printf("[WARN] lifecycle recover failed (starting with empty state): %v", err)
 	}
 
+	// 启动预警超时扫描器
+	expireScanner := NewExpireScanner(pool, lifecycle, cfg.AlarmExpireMinutes, cfg.ExpireScanIntervalMinutes)
+	expireScanner.Start(ctx)
+
 	service := &adapter{
 		cfg:       cfg,
 		pool:      pool,

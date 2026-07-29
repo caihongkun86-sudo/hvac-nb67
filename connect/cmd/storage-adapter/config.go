@@ -22,6 +22,12 @@ type Config struct {
 	// WriteFactRaw 控制是否把 storage 消息写入 hvac.fact_raw。
 	// 默认 true；lifecycle-only 部署通常只订阅 signal-predict，不会走此路径。
 	WriteFactRaw bool
+	
+	// 预警超时配置
+	// AlarmExpireMinutes: 预警最后更新时间超过此分钟数后，自动判定为消除（0 表示禁用）
+	// ExpireScanIntervalMinutes: 扫描间隔（分钟）
+	AlarmExpireMinutes        int
+	ExpireScanIntervalMinutes int
 }
 
 func loadConfig() Config {
@@ -35,6 +41,9 @@ func loadConfig() Config {
 		LogLevel:       getEnv("LOG_LEVEL", "INFO"),
 		WriteFactEvent: getEnvBool("WRITE_FACT_EVENT", true),
 		WriteFactRaw:   getEnvBool("WRITE_FACT_RAW", true),
+		// 预警超时配置：默认 30 分钟无更新则自动消除，每 5 分钟扫描一次
+		AlarmExpireMinutes:        getEnvInt("ALARM_EXPIRE_MINUTES", 30),
+		ExpireScanIntervalMinutes: getEnvInt("EXPIRE_SCAN_INTERVAL_MINUTES", 5),
 	}
 }
 
