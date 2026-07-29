@@ -8,8 +8,6 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -23,6 +21,12 @@ func main() {
 	lifeCache := newLifeCache()
 	stationCache := newStationCache()
 
+	// 初始化数据库检查器（用于统一状态管理）
+	dbChecker, dbErr := NewDBChecker(context.Background(), cfg.PGDSN)
+	if dbErr != nil {
+		log.Printf("[WARN] db checker init failed: %v", dbErr)
+	}
+
 	// 初始化批量发送器
 	batchSender := newBatchSender(client, cfg)
 
@@ -31,15 +35,9 @@ func main() {
 
 	// Phase 6: 启动时从 warning_lifecycle 恢复活跃集合（PG_DSN 非空时启用）。
 	// 避免 ground-reporter 重启后整批重发 open 事件给平台。
-	if cfg.PGDSN != "" {
-		pool, perr := pgxpool.New(ctx, cfg.PGDSN)
-		if perr != nil {
-			log.Printf("[WARN] PG pool init failed, skip lifecycle recover: %v", perr)
-		} else {
-			if rerr := tracker.RecoverFromLifecycle(ctx, pool); rerr != nil {
-				log.Printf("[WARN] alarm tracker recover failed: %v", rerr)
-			}
-			pool.Close() // 仅用于一次性恢复，不长持
+	if cfg.PGDSN != "" && dbChecker != nil {
+		if rerr := tracker.RecoverFromLifecycle(ctx, dbChecker.pool); rerr != nil {
+			log.Printf("[WARN] alarm tracker recover failed: %v", rerr)
 		}
 	}
 
@@ -53,7 +51,7 @@ func main() {
 	go consumeTopic(ctx, &wg, cfg.KafkaBrokers,
 		"signal-predict", "ground-reporter-predict",
 		func(data []byte) {
-			Handle61Predict(ctx, batchSender, tracker, stationCache, cfg, data)
+			Handle61Predict(ctx, batchSender, dbChecker, tracker, stationCache, cfg, data)
 		},
 	)
 
@@ -107,6 +105,11 @@ func main() {
 	// 停止批量发送器，等待剩余记录发送完成
 	if batchSender != nil {
 		batchSender.Stop()
+	}
+	
+	// 关闭数据库检查器
+	if dbChecker != nil {
+		dbChecker.Close()
 	}
 	
 	cancel()

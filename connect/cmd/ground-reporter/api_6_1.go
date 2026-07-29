@@ -68,7 +68,7 @@ func Handle61Alarm(ctx context.Context, client *PlatformClient, tracker *AlarmTr
 }
 
 // Handle61Predict processes a signal-predict message the same way as alarm.
-func Handle61Predict(ctx context.Context, batchSender *BatchSender, tracker *AlarmTracker, sc *StationCache, cfg Config, data []byte) {
+func Handle61Predict(ctx context.Context, batchSender *BatchSender, dbChecker *DBChecker, tracker *AlarmTracker, sc *StationCache, cfg Config, data []byte) {
 	var msg SubEventMsg
 	if err := json.Unmarshal(data, &msg); err != nil {
 		log.Printf("[WARN] 6.1 predict: bad json: %v", err)
@@ -119,6 +119,15 @@ func Handle61Predict(ctx context.Context, batchSender *BatchSender, tracker *Ala
 
 	if len(records) == 0 {
 		return
+	}
+
+	// 统一状态管理：发送前查询数据库，过滤已在数据库中活跃的预警
+	if dbChecker != nil {
+		records = dbChecker.FilterActiveAlarms(ctx, records, msg.EventMeta.DeviceID)
+		if len(records) == 0 {
+			log.Printf("[PREDICT-SKIP] device=%s: all records already active in DB, skipping", msg.EventMeta.DeviceID)
+			return
+		}
 	}
 	
 	// 发送前打印完整请求信息
