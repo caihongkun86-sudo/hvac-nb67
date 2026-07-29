@@ -31,6 +31,11 @@ services:
       # FLUSH_INTERVAL_MS: 超时自动发送（默认 5000ms）
       - BATCH_SIZE=50
       - FLUSH_INTERVAL_MS=5000
+      # 状态同步配置：确保 ground-reporter 内存状态与数据库一致
+      # STATE_SYNC_ENABLED: 是否启用状态同步（默认 true）
+      # STATE_SYNC_INTERVAL_SEC: 同步间隔秒数（默认 30）
+      - STATE_SYNC_ENABLED=true
+      - STATE_SYNC_INTERVAL_SEC=30
     depends_on:
       mock-platform:
         condition: service_healthy

@@ -41,6 +41,12 @@ type Config struct {
 	BatchSize         int
 	FlushIntervalMs   int
 
+	// 状态同步配置
+	// StateSyncEnabled: 是否启用内存与数据库状态同步
+	// StateSyncIntervalSec: 同步间隔（秒）
+	StateSyncEnabled    bool
+	StateSyncIntervalSec int
+
 	LogLevel string
 }
 
@@ -69,6 +75,10 @@ func loadConfig() Config {
 		// 批量发送配置
 		BatchSize:       getEnvInt("BATCH_SIZE", 50),
 		FlushIntervalMs: getEnvInt("FLUSH_INTERVAL_MS", 5000),
+
+		// 状态同步配置
+		StateSyncEnabled:     getEnvBool("STATE_SYNC_ENABLED", true),
+		StateSyncIntervalSec: getEnvInt("STATE_SYNC_INTERVAL_SEC", 30),
 
 		LogLevel: getEnv("LOG_LEVEL", "INFO"),
 	}
@@ -102,4 +112,16 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }

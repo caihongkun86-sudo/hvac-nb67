@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -44,6 +45,14 @@ func main() {
 	// 启动批量发送器
 	if batchSender != nil {
 		batchSender.Start()
+	}
+
+	// 启动状态同步器（定期从数据库同步预警状态到内存）
+	var stateSyncer *StateSyncer
+	if cfg.StateSyncEnabled && dbChecker != nil && dbChecker.IsAvailable() {
+		syncInterval := time.Duration(cfg.StateSyncIntervalSec) * time.Second
+		stateSyncer = NewStateSyncer(tracker, dbChecker, syncInterval)
+		stateSyncer.Start()
 	}
 
 	// --- 6.1: signal-predict ---
@@ -101,6 +110,11 @@ func main() {
 	<-quit
 
 	log.Printf("[INFO] ground-reporter shutting down...")
+	
+	// 停止状态同步器
+	if stateSyncer != nil {
+		stateSyncer.Stop()
+	}
 	
 	// 停止批量发送器，等待剩余记录发送完成
 	if batchSender != nil {

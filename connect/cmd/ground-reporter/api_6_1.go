@@ -90,6 +90,18 @@ func Handle61Predict(ctx context.Context, batchSender *BatchSender, dbChecker *D
 		codes[i] = HitCode{Code: h.Code, Name: h.Name}
 	}
 
+	// --- 关键同步步骤：处理消息前先同步数据库状态 ---
+	// 防止 storage-adapter 通过 ExpireScanner 消除预警后，ground-reporter 内存状态不同步
+	// 场景：设备离线 → storage-adapter 扫描消除数据库预警 → 设备恢复 → 新预警会被误判为"已活跃"
+	if dbChecker != nil && dbChecker.IsAvailable() {
+		dbActiveCodes, err := dbChecker.SyncAlarmState(ctx, msg.EventMeta.DeviceID)
+		if err != nil {
+			log.Printf("[WARN] sync alarm state from DB failed: %v", err)
+		} else {
+			tracker.SyncWithDB(deviceKey, dbActiveCodes, nowMs())
+		}
+	}
+
 	ts := nowMs()
 	diff := tracker.Diff(deviceKey, codes, ts)
 	si := sc.Get(msg.EventMeta.DeviceID)

@@ -95,6 +95,56 @@ func (t *AlarmTracker) Diff(deviceID string, currentCodes []HitCode, nowMs int64
 	return diff
 }
 
+// SyncWithDB 根据数据库中的活跃预警列表，同步更新内存状态
+// 参数:
+//   - deviceID: 设备 ID
+//   - dbActiveCodes: 数据库中活跃的预警代码集合 (code -> true)
+//   - nowMs: 当前时间戳
+//
+// 行为:
+//   - 内存中有但数据库中没有的 code → 从内存中删除（预警已被 storage-adapter 消除）
+//   - 数据库中有但内存中没有的 code → 添加到内存（预警在数据库中仍活跃）
+//
+// 返回: 被删除的 code 数量
+func (t *AlarmTracker) SyncWithDB(deviceID string, dbActiveCodes map[string]bool, nowMs int64) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	existing, ok := t.active[deviceID]
+	if !ok {
+		existing = make(map[string]*activeAlarm)
+		t.active[deviceID] = existing
+	}
+
+	removedCount := 0
+	addedCount := 0
+
+	// 找出内存中有但数据库中没有的 code → 删除
+	for code := range existing {
+		if _, stillActive := dbActiveCodes[code]; !stillActive {
+			delete(existing, code)
+			removedCount++
+		}
+	}
+
+	// 找出数据库中有但内存中没有的 code → 添加
+	for code := range dbActiveCodes {
+		if _, exists := existing[code]; !exists {
+			existing[code] = &activeAlarm{
+				UUID:      newUUID(),
+				StartTime: nowMs,
+			}
+			addedCount++
+		}
+	}
+
+	if removedCount > 0 || addedCount > 0 {
+		log.Printf("[SYNC-STATE] device=%s: removed %d, added %d from DB", deviceID, removedCount, addedCount)
+	}
+
+	return removedCount
+}
+
 // HitCode carries the minimal info needed for diff (code + display name).
 type HitCode struct {
 	Code string
@@ -161,4 +211,36 @@ func (t *AlarmTracker) RecoverFromLifecycle(ctx context.Context, pool *pgxpool.P
 	}
 	log.Printf("[INFO] alarm tracker recover: %d active codes across %d devices", total, len(t.active))
 	return nil
+}
+
+// GetDevices 获取所有正在追踪的设备 ID 列表（去除前缀）
+func (t *AlarmTracker) GetDevices() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	deviceSet := make(map[string]bool)
+	for key := range t.active {
+		// 去除前缀（predict: 或 alarm:）
+		deviceID := key
+		if len(key) > 8 && key[:8] == "predict:" {
+			deviceID = key[8:]
+		} else if len(key) > 6 && key[:6] == "alarm:" {
+			deviceID = key[6:]
+		}
+		deviceSet[deviceID] = true
+	}
+
+	devices := make([]string, 0, len(deviceSet))
+	for deviceID := range deviceSet {
+		devices = append(devices, deviceID)
+	}
+	return devices
+}
+
+// HasDevice 检查指定设备键是否存在
+func (t *AlarmTracker) HasDevice(deviceKey string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.active[deviceKey]
+	return ok
 }
