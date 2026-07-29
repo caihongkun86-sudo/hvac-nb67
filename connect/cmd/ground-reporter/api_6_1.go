@@ -133,15 +133,9 @@ func Handle61Predict(ctx context.Context, batchSender *BatchSender, dbChecker *D
 		return
 	}
 
-	// 统一状态管理：发送前查询数据库，过滤已在数据库中活跃的预警
-	if dbChecker != nil {
-		records = dbChecker.FilterActiveAlarms(ctx, records, msg.EventMeta.DeviceID)
-		if len(records) == 0 {
-			log.Printf("[PREDICT-SKIP] device=%s: all records already active in DB, skipping", msg.EventMeta.DeviceID)
-			return
-		}
-	}
-	
+	// 状态一致性由 SyncWithDB 在 Diff 前保证，无需发送前再次查询数据库
+	// 见 Handle61Predict 开头的同步步骤
+
 	// 发送前打印完整请求信息
 	log.Printf("[PREDICT-SEND] device=%s, carriage=%d, train=%d, records=%d, url=%s", 
 		msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, msg.EventMeta.TrainID, len(records), cfg.FaultRecordURL)
