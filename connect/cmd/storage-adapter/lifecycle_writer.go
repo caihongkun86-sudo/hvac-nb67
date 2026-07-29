@@ -162,6 +162,8 @@ func (w *LifecycleWriter) ProcessFrames(ctx context.Context, frames []PredictFra
 }
 
 // applyFrame 对单个 (device, event_time) 帧做 diff 与写库。
+// 重要：内存状态更新在数据库成功提交之后执行，确保内存与数据库一致。
+// 这样即使数据库写入失败，内存状态也不会被错误更新，避免"假消除"导致新预警丢失。
 func (w *LifecycleWriter) applyFrame(ctx context.Context, deviceID string, frame PredictFrame, eventTime time.Time) error {
 	w.mu.Lock()
 	prev, ok := w.active[deviceID]
@@ -197,20 +199,13 @@ func (w *LifecycleWriter) applyFrame(ctx context.Context, deviceID string, frame
 			toClose = append(toClose, code)
 		}
 	}
-
-	// 推进内存状态（即便 DB 写失败也保持单调推进，避免重启风暴）
-	for _, h := range toOpen {
-		prev[h.FaultCode] = struct{}{}
-	}
-	for _, c := range toClose {
-		delete(prev, c)
-	}
 	w.mu.Unlock()
 
 	if len(toOpen) == 0 && len(toClose) == 0 && len(toTouch) == 0 {
 		return nil
 	}
 
+	// 先写数据库（在内存更新之前）
 	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("lifecycle tx begin: %w", err)
@@ -241,6 +236,18 @@ func (w *LifecycleWriter) applyFrame(ctx context.Context, deviceID string, frame
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("lifecycle tx commit: %w", err)
 	}
+
+	// 数据库成功提交后，再更新内存状态
+	// 这样即使数据库写入失败，内存状态也不会被错误更新
+	w.mu.Lock()
+	for _, h := range toOpen {
+		prev[h.FaultCode] = struct{}{}
+	}
+	for _, c := range toClose {
+		delete(prev, c)
+	}
+	w.mu.Unlock()
+
 	if len(toOpen) > 0 || len(toClose) > 0 {
 		log.Printf("[INFO] lifecycle %s: +%d -%d ~%d", deviceID, len(toOpen), len(toClose), len(toTouch))
 	}
