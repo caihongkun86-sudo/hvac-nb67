@@ -38,14 +38,15 @@ type Config struct {
 	// 批量发送配置（减少 HTTP 调用频率）
 	// BatchSize: 累积多少条记录后发送，0 或 1 表示不启用批量
 	// FlushIntervalMs: 超时自动发送（毫秒），0 表示不启用超时
-	BatchSize         int
-	FlushIntervalMs   int
+	BatchSize       int
+	FlushIntervalMs int
 
-	// 状态同步配置
-	// StateSyncEnabled: 是否启用内存与数据库状态同步
-	// StateSyncIntervalSec: 同步间隔（秒）
-	StateSyncEnabled    bool
-	StateSyncIntervalSec int
+	// AlarmSyncIntervalSec 从 DB 同步清理内存 active 的间隔（秒）。
+	// storage-adapter 的 SweepTimeouts 在 DB 层 close 预警后，本进程内存 active
+	// 不会自动消失；定期查 DB end_time IS NULL 集合，删除内存中已被 close 的 code，
+	// 使下次 hits=[X] 到达时能重新触发 Added 上报平台（"消除后若仍存在能及时重报"）。
+	// 0 = 禁用同步。默认 30s。需配置 PGDSN 才生效。
+	AlarmSyncIntervalSec int
 
 	LogLevel string
 }
@@ -76,9 +77,7 @@ func loadConfig() Config {
 		BatchSize:       getEnvInt("BATCH_SIZE", 50),
 		FlushIntervalMs: getEnvInt("FLUSH_INTERVAL_MS", 5000),
 
-		// 状态同步配置
-		StateSyncEnabled:     getEnvBool("STATE_SYNC_ENABLED", true),
-		StateSyncIntervalSec: getEnvInt("STATE_SYNC_INTERVAL_SEC", 30),
+		AlarmSyncIntervalSec: getEnvInt("ALARM_SYNC_INTERVAL_SEC", 180),
 
 		LogLevel: getEnv("LOG_LEVEL", "INFO"),
 	}
@@ -112,16 +111,4 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
-}
-
-func getEnvBool(key string, fallback bool) bool {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return fallback
-	}
-	return b
 }

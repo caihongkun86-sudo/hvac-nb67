@@ -68,7 +68,7 @@ func Handle61Alarm(ctx context.Context, client *PlatformClient, tracker *AlarmTr
 }
 
 // Handle61Predict processes a signal-predict message the same way as alarm.
-func Handle61Predict(ctx context.Context, batchSender *BatchSender, dbChecker *DBChecker, tracker *AlarmTracker, sc *StationCache, cfg Config, data []byte) {
+func Handle61Predict(ctx context.Context, batchSender *BatchSender, tracker *AlarmTracker, sc *StationCache, cfg Config, data []byte) {
 	var msg SubEventMsg
 	if err := json.Unmarshal(data, &msg); err != nil {
 		log.Printf("[WARN] 6.1 predict: bad json: %v", err)
@@ -88,18 +88,6 @@ func Handle61Predict(ctx context.Context, batchSender *BatchSender, dbChecker *D
 	codes := make([]HitCode, len(hits))
 	for i, h := range hits {
 		codes[i] = HitCode{Code: h.Code, Name: h.Name}
-	}
-
-	// --- 关键同步步骤：处理消息前先同步数据库状态 ---
-	// 防止 storage-adapter 通过 ExpireScanner 消除预警后，ground-reporter 内存状态不同步
-	// 场景：设备离线 → storage-adapter 扫描消除数据库预警 → 设备恢复 → 新预警会被误判为"已活跃"
-	if dbChecker != nil && dbChecker.IsAvailable() {
-		dbActiveCodes, err := dbChecker.SyncAlarmState(ctx, msg.EventMeta.DeviceID)
-		if err != nil {
-			log.Printf("[WARN] sync alarm state from DB failed: %v", err)
-		} else {
-			tracker.SyncWithDB(deviceKey, dbActiveCodes, nowMs())
-		}
 	}
 
 	ts := nowMs()
@@ -132,10 +120,7 @@ func Handle61Predict(ctx context.Context, batchSender *BatchSender, dbChecker *D
 	if len(records) == 0 {
 		return
 	}
-
-	// 状态一致性由 SyncWithDB 在 Diff 前保证，无需发送前再次查询数据库
-	// 见 Handle61Predict 开头的同步步骤
-
+	
 	// 发送前打印完整请求信息
 	log.Printf("[PREDICT-SEND] device=%s, carriage=%d, train=%d, records=%d, url=%s", 
 		msg.EventMeta.DeviceID, msg.EventMeta.CarriageID, msg.EventMeta.TrainID, len(records), cfg.FaultRecordURL)

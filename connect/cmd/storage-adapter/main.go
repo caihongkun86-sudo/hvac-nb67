@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -27,9 +28,31 @@ func main() {
 		log.Printf("[WARN] lifecycle recover failed (starting with empty state): %v", err)
 	}
 
-	// 启动预警超时扫描器
-	expireScanner := NewExpireScanner(pool, lifecycle, cfg.AlarmExpireMinutes, cfg.ExpireScanIntervalMinutes)
-	expireScanner.Start(ctx)
+	// 启动预警超时清扫器：兜底关闭 last_seen_time 长期未刷新的活跃预警，
+	// 避免 device 断流时预警无限期挂起（DB close + 内存 active 同步清理）。
+	if cfg.WarnSweepTimeoutSec > 0 && cfg.WarnSweepIntervalSec > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.WarnSweepIntervalSec) * time.Second)
+			defer ticker.Stop()
+			log.Printf("[INFO] lifecycle sweep ticker started: timeout=%ds interval=%ds",
+				cfg.WarnSweepTimeoutSec, cfg.WarnSweepIntervalSec)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					sweepCtx, sweepCancel := context.WithTimeout(ctx, 10*time.Second)
+					n, err := lifecycle.SweepTimeouts(sweepCtx, cfg.WarnSweepTimeoutSec)
+					sweepCancel()
+					if err != nil {
+						log.Printf("[WARN] lifecycle sweep failed: %v", err)
+					} else if n > 0 {
+						log.Printf("[INFO] lifecycle sweep closed %d stale warnings", n)
+					}
+				}
+			}
+		}()
+	}
 
 	service := &adapter{
 		cfg:       cfg,

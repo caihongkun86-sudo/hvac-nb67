@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -22,12 +24,6 @@ func main() {
 	lifeCache := newLifeCache()
 	stationCache := newStationCache()
 
-	// 初始化数据库检查器（用于统一状态管理）
-	dbChecker, dbErr := NewDBChecker(context.Background(), cfg.PGDSN)
-	if dbErr != nil {
-		log.Printf("[WARN] db checker init failed: %v", dbErr)
-	}
-
 	// 初始化批量发送器
 	batchSender := newBatchSender(client, cfg)
 
@@ -36,10 +32,43 @@ func main() {
 
 	// Phase 6: 启动时从 warning_lifecycle 恢复活跃集合（PG_DSN 非空时启用）。
 	// 避免 ground-reporter 重启后整批重发 open 事件给平台。
-	if cfg.PGDSN != "" && dbChecker != nil {
-		if rerr := tracker.RecoverFromLifecycle(ctx, dbChecker.pool); rerr != nil {
-			log.Printf("[WARN] alarm tracker recover failed: %v", rerr)
+	// pool 长持：SyncClearedFromDB 定时同步也依赖它。
+	var longLivedPool *pgxpool.Pool
+	if cfg.PGDSN != "" {
+		pool, perr := pgxpool.New(ctx, cfg.PGDSN)
+		if perr != nil {
+			log.Printf("[WARN] PG pool init failed, skip lifecycle recover: %v", perr)
+		} else {
+			if rerr := tracker.RecoverFromLifecycle(ctx, pool); rerr != nil {
+				log.Printf("[WARN] alarm tracker recover failed: %v", rerr)
+			}
+			longLivedPool = pool
 		}
+	}
+
+	// 启动内存 active 同步协程：定期从 DB 活跃集合清理内存中已被 storage-adapter
+	// SweepTimeouts close 的 code，使下次 hits=[X] 到达时能重新触发 Added 上报平台
+	// （"消除后若仍存在能及时重报"）。
+	if longLivedPool != nil && cfg.AlarmSyncIntervalSec > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(time.Duration(cfg.AlarmSyncIntervalSec) * time.Second)
+			defer ticker.Stop()
+			log.Printf("[INFO] alarm sync ticker started: interval=%ds", cfg.AlarmSyncIntervalSec)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					syncCtx, syncCancel := context.WithTimeout(ctx, 10*time.Second)
+					if _, err := tracker.SyncClearedFromDB(syncCtx, longLivedPool); err != nil {
+						log.Printf("[WARN] alarm sync failed: %v", err)
+					}
+					syncCancel()
+				}
+			}
+		}()
 	}
 
 	// 启动批量发送器
@@ -47,20 +76,12 @@ func main() {
 		batchSender.Start()
 	}
 
-	// 启动状态同步器（定期从数据库同步预警状态到内存）
-	var stateSyncer *StateSyncer
-	if cfg.StateSyncEnabled && dbChecker != nil && dbChecker.IsAvailable() {
-		syncInterval := time.Duration(cfg.StateSyncIntervalSec) * time.Second
-		stateSyncer = NewStateSyncer(tracker, dbChecker, syncInterval)
-		stateSyncer.Start()
-	}
-
 	// --- 6.1: signal-predict ---
 	wg.Add(1)
 	go consumeTopic(ctx, &wg, cfg.KafkaBrokers,
 		"signal-predict", "ground-reporter-predict",
 		func(data []byte) {
-			Handle61Predict(ctx, batchSender, dbChecker, tracker, stationCache, cfg, data)
+			Handle61Predict(ctx, batchSender, tracker, stationCache, cfg, data)
 		},
 	)
 
@@ -110,22 +131,17 @@ func main() {
 	<-quit
 
 	log.Printf("[INFO] ground-reporter shutting down...")
-	
-	// 停止状态同步器
-	if stateSyncer != nil {
-		stateSyncer.Stop()
-	}
-	
+
 	// 停止批量发送器，等待剩余记录发送完成
 	if batchSender != nil {
 		batchSender.Stop()
 	}
-	
-	// 关闭数据库检查器
-	if dbChecker != nil {
-		dbChecker.Close()
+
+	// 关闭长持 PG pool（启动恢复 + SyncClearedFromDB 共用）
+	if longLivedPool != nil {
+		longLivedPool.Close()
 	}
-	
+
 	cancel()
 	wg.Wait()
 	log.Printf("[INFO] ground-reporter stopped")

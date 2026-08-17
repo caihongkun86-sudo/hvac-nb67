@@ -61,6 +61,21 @@ SELECT device_id, fault_code
   FROM hvac.warning_lifecycle
  WHERE end_time IS NULL;
 `
+
+	lifecycleSweepSelectSQL = `
+SELECT device_id, fault_code
+  FROM hvac.warning_lifecycle
+ WHERE end_time IS NULL
+   AND start_time < now() - ($1 * interval '1 second');
+`
+
+	lifecycleSweepUpdateSQL = `
+UPDATE hvac.warning_lifecycle
+   SET end_time = last_seen_time,
+       updated_at = now()
+ WHERE end_time IS NULL
+   AND start_time < now() - ($1 * interval '1 second');
+`
 )
 
 // PredictHitMeta 是 lifecycle 关心的最小 hit 信息。
@@ -162,8 +177,6 @@ func (w *LifecycleWriter) ProcessFrames(ctx context.Context, frames []PredictFra
 }
 
 // applyFrame 对单个 (device, event_time) 帧做 diff 与写库。
-// 重要：内存状态更新在数据库成功提交之后执行，确保内存与数据库一致。
-// 这样即使数据库写入失败，内存状态也不会被错误更新，避免"假消除"导致新预警丢失。
 func (w *LifecycleWriter) applyFrame(ctx context.Context, deviceID string, frame PredictFrame, eventTime time.Time) error {
 	w.mu.Lock()
 	prev, ok := w.active[deviceID]
@@ -199,13 +212,20 @@ func (w *LifecycleWriter) applyFrame(ctx context.Context, deviceID string, frame
 			toClose = append(toClose, code)
 		}
 	}
+
+	// 推进内存状态（即便 DB 写失败也保持单调推进，避免重启风暴）
+	for _, h := range toOpen {
+		prev[h.FaultCode] = struct{}{}
+	}
+	for _, c := range toClose {
+		delete(prev, c)
+	}
 	w.mu.Unlock()
 
 	if len(toOpen) == 0 && len(toClose) == 0 && len(toTouch) == 0 {
 		return nil
 	}
 
-	// 先写数据库（在内存更新之前）
 	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("lifecycle tx begin: %w", err)
@@ -236,18 +256,6 @@ func (w *LifecycleWriter) applyFrame(ctx context.Context, deviceID string, frame
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("lifecycle tx commit: %w", err)
 	}
-
-	// 数据库成功提交后，再更新内存状态
-	// 这样即使数据库写入失败，内存状态也不会被错误更新
-	w.mu.Lock()
-	for _, h := range toOpen {
-		prev[h.FaultCode] = struct{}{}
-	}
-	for _, c := range toClose {
-		delete(prev, c)
-	}
-	w.mu.Unlock()
-
 	if len(toOpen) > 0 || len(toClose) > 0 {
 		log.Printf("[INFO] lifecycle %s: +%d -%d ~%d", deviceID, len(toOpen), len(toClose), len(toTouch))
 	}
@@ -326,4 +334,62 @@ func sortFramesByTime(frames []PredictFrame) {
 			frames[j-1], frames[j] = frames[j], frames[j-1]
 		}
 	}
+}
+
+// SweepTimeouts 关闭超时未刷新的活跃预警，并同步清理内存 active 集合。
+//
+// 触发条件：end_time IS NULL 且 last_seen_time 距今超过 timeoutSec 秒。
+// storage-adapter 每帧都刷新 last_seen_time，若连续 timeoutSec 秒未刷新，
+// 说明设备断流，应由清扫器兜底关闭，避免预警无限期挂起。
+//
+// 本方法在同一进程内原子完成"DB close + 内存清理"，避免"DB 已 close、内存仍 active"
+// 的不一致（否则设备恢复后 applyFrame 误走 toTouch，lifecycleTouchSQL 的 WHERE
+// end_time IS NULL 匹配 0 行，DB 永远不会重新 INSERT）。
+//
+// 竞态：UPDATE 的 WHERE 同样判断 last_seen_time，查询后若有新帧刷新，UPDATE 不会误 close；
+// 清内存时多删的 code 会在下次 applyFrame 重新 INSERT（部分唯一索引兜底防重）。
+func (w *LifecycleWriter) SweepTimeouts(ctx context.Context, timeoutSec int) (int, error) {
+	if timeoutSec <= 0 {
+		return 0, nil
+	}
+
+	rows, err := w.pool.Query(ctx, lifecycleSweepSelectSQL, timeoutSec)
+	if err != nil {
+		return 0, fmt.Errorf("sweep query: %w", err)
+	}
+	type dc struct{ device, code string }
+	var cleared []dc
+	for rows.Next() {
+		var d, c string
+		if err := rows.Scan(&d, &c); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("sweep scan: %w", err)
+		}
+		cleared = append(cleared, dc{d, c})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("sweep iter: %w", err)
+	}
+	if len(cleared) == 0 {
+		return 0, nil
+	}
+
+	if _, err := w.pool.Exec(ctx, lifecycleSweepUpdateSQL, timeoutSec); err != nil {
+		return 0, fmt.Errorf("sweep update: %w", err)
+	}
+
+	w.mu.Lock()
+	for _, c := range cleared {
+		if codes, ok := w.active[c.device]; ok {
+			delete(codes, c.code)
+			if len(codes) == 0 {
+				delete(w.active, c.device)
+			}
+		}
+	}
+	w.mu.Unlock()
+
+	log.Printf("[INFO] lifecycle sweep: closed %d stale warnings (timeout=%ds)", len(cleared), timeoutSec)
+	return len(cleared), nil
 }

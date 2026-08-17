@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,56 +96,6 @@ func (t *AlarmTracker) Diff(deviceID string, currentCodes []HitCode, nowMs int64
 	return diff
 }
 
-// SyncWithDB 根据数据库中的活跃预警列表，同步更新内存状态
-// 参数:
-//   - deviceID: 设备 ID
-//   - dbActiveCodes: 数据库中活跃的预警代码集合 (code -> true)
-//   - nowMs: 当前时间戳
-//
-// 行为:
-//   - 内存中有但数据库中没有的 code → 从内存中删除（预警已被 storage-adapter 消除）
-//   - 数据库中有但内存中没有的 code → 添加到内存（预警在数据库中仍活跃）
-//
-// 返回: 被删除的 code 数量
-func (t *AlarmTracker) SyncWithDB(deviceID string, dbActiveCodes map[string]bool, nowMs int64) int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	existing, ok := t.active[deviceID]
-	if !ok {
-		existing = make(map[string]*activeAlarm)
-		t.active[deviceID] = existing
-	}
-
-	removedCount := 0
-	addedCount := 0
-
-	// 找出内存中有但数据库中没有的 code → 删除
-	for code := range existing {
-		if _, stillActive := dbActiveCodes[code]; !stillActive {
-			delete(existing, code)
-			removedCount++
-		}
-	}
-
-	// 找出数据库中有但内存中没有的 code → 添加
-	for code := range dbActiveCodes {
-		if _, exists := existing[code]; !exists {
-			existing[code] = &activeAlarm{
-				UUID:      newUUID(),
-				StartTime: nowMs,
-			}
-			addedCount++
-		}
-	}
-
-	if removedCount > 0 || addedCount > 0 {
-		log.Printf("[SYNC-STATE] device=%s: removed %d, added %d from DB", deviceID, removedCount, addedCount)
-	}
-
-	return removedCount
-}
-
 // HitCode carries the minimal info needed for diff (code + display name).
 type HitCode struct {
 	Code string
@@ -213,34 +164,72 @@ func (t *AlarmTracker) RecoverFromLifecycle(ctx context.Context, pool *pgxpool.P
 	return nil
 }
 
-// GetDevices 获取所有正在追踪的设备 ID 列表（去除前缀）
-func (t *AlarmTracker) GetDevices() []string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// SyncClearedFromDB 从 DB 活跃集合同步清理内存 active。
+//
+// storage-adapter 的 SweepTimeouts 在 DB 层 close 预警后，本进程内存 active 不会自动消失。
+// 本方法查询 DB 当前 end_time IS NULL 的集合，删除内存中"DB 已 close"的 code。
+//
+// 效果：内存 active 被清理后，若设备恢复且故障仍存在（上游持续发 hits=[X]），下一次 Diff
+// 会发现 X 不在 active → 触发 Added → 重新向平台上报 open 报文（"消除后若仍存在能及时重报"）。
+//
+// 只处理带 "predict:" 前缀的 key（与 Handle61Predict / RecoverFromLifecycle 一致）；
+// alarm 路径不上报平台，不在清理范围。本方法不向平台发消除报文（按约定只更新 lifecycle 表）。
+func (t *AlarmTracker) SyncClearedFromDB(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT device_id, fault_code
+		  FROM hvac.warning_lifecycle
+		 WHERE end_time IS NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("alarm tracker sync query: %w", err)
+	}
+	defer rows.Close()
 
-	deviceSet := make(map[string]bool)
-	for key := range t.active {
-		// 去除前缀（predict: 或 alarm:）
-		deviceID := key
-		if len(key) > 8 && key[:8] == "predict:" {
-			deviceID = key[8:]
-		} else if len(key) > 6 && key[:6] == "alarm:" {
-			deviceID = key[6:]
+	dbActive := make(map[string]map[string]struct{})
+	for rows.Next() {
+		var deviceID, faultCode string
+		if err := rows.Scan(&deviceID, &faultCode); err != nil {
+			return 0, fmt.Errorf("alarm tracker sync scan: %w", err)
 		}
-		deviceSet[deviceID] = true
+		key := "predict:" + deviceID
+		set, ok := dbActive[key]
+		if !ok {
+			set = make(map[string]struct{})
+			dbActive[key] = set
+		}
+		set[faultCode] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("alarm tracker sync iter: %w", err)
 	}
 
-	devices := make([]string, 0, len(deviceSet))
-	for deviceID := range deviceSet {
-		devices = append(devices, deviceID)
-	}
-	return devices
-}
-
-// HasDevice 检查指定设备键是否存在
-func (t *AlarmTracker) HasDevice(deviceKey string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, ok := t.active[deviceKey]
-	return ok
+
+	removed := 0
+	for devKey, codes := range t.active {
+		if !strings.HasPrefix(devKey, "predict:") {
+			continue
+		}
+		dbCodes, inDB := dbActive[devKey]
+		if !inDB {
+			removed += len(codes)
+			delete(t.active, devKey)
+			continue
+		}
+		for code := range codes {
+			if _, stillInDB := dbCodes[code]; !stillInDB {
+				delete(codes, code)
+				removed++
+			}
+		}
+		if len(codes) == 0 {
+			delete(t.active, devKey)
+		}
+	}
+
+	if removed > 0 {
+		log.Printf("[INFO] alarm tracker sync: cleared %d stale active codes from memory", removed)
+	}
+	return removed, nil
 }
