@@ -118,7 +118,7 @@ type parsedInput struct {
 	EventTimeText  string         `json:"event_time_text"`
 	EventTimeValid bool           `json:"event_time_valid"`
 	IngestTime     string         `json:"ingest_time"`
-	Raw           map[string]any `json:"raw"`
+	Raw            map[string]any `json:"raw"`
 }
 
 // ============================================================
@@ -280,11 +280,20 @@ func (p *NB67EventProcessor) Process(ctx context.Context, msg *service.Message) 
 	var currentTime time.Time
 	var parseErr error
 	if p.runtime == "DEV" {
-		// DEV 模式使用入库时间（RFC3339 格式）
 		currentTime, parseErr = time.Parse(time.RFC3339, input.IngestTime)
 	} else {
-		// PRD 模式使用原始物理时间（自定义文本格式）
-		currentTime, parseErr = time.Parse("2006-01-02 15:04:05", input.EventTimeText)
+		eventTimeFormats := []string{
+			"2006-01-02 15:04:05",
+			"2006-1-2 15:4:5",
+			"2006-01-2 15:04:5",
+			"2006-1-02 15:4:05",
+		}
+		for _, format := range eventTimeFormats {
+			currentTime, parseErr = time.Parse(format, input.EventTimeText)
+			if parseErr == nil {
+				break
+			}
+		}
 	}
 
 	if parseErr != nil {
@@ -456,7 +465,7 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 			fmt.Printf("[制冷系统预警] %s 触发条件1（电流差异常）\n", name)
 			fmt.Printf("  - 判断值: %s\n", isCurrentDiff)
 			fmt.Printf("  - 参数值: f1=%d, f2=%d, i1=%d, i2=%d, 电流差=%d, 阈值=%d\n", f1, f2, i1, i2, i1-i2, cpSysCurrentDiffThresh)
-			fmt.Printf("  - 触发条件: f1==f2(%v) && f1>0(%v) && |i1-i2|>阈值(%v)\n", f1==f2, f1>0, i1-i2 > cpSysCurrentDiffThresh || i1-i2 < -cpSysCurrentDiffThresh)
+			fmt.Printf("  - 触发条件: f1==f2(%v) && f1>0(%v) && |i1-i2|>阈值(%v)\n", f1 == f2, f1 > 0, i1-i2 > cpSysCurrentDiffThresh || i1-i2 < -cpSysCurrentDiffThresh)
 			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3,
 				TriggerConditionSnapshot: csTriggerConditionText("WARN_COOLING_SYSTEM")})
 			return
@@ -468,9 +477,9 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 		if p.checkRule(isSpErr, 10*time.Minute, deviceID, code+"_sp", currentTime) {
 			fmt.Printf("[制冷系统预警] %s 触发条件2（过热度异常）\n", name)
 			fmt.Printf("  - 设备ID: %s\n", deviceID)
-			fmt.Printf("  - 参数值: f1=%d, sp1=%d\n", f1, sp1 )
+			fmt.Printf("  - 参数值: f1=%d, sp1=%d\n", f1, sp1)
 			fmt.Printf("  - 触发条件: 已运行5分钟(%v) && 过热度异常(%v)\n", hasBeenRunning, isSpErr)
-			fmt.Printf("  - 过热度范围检查: sp1>200(%v), sp1 < -80(%v)\n", sp1>200, sp1 < -80)
+			fmt.Printf("  - 过热度范围检查: sp1>200(%v), sp1 < -80(%v)\n", sp1 > 200, sp1 < -80)
 			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3})
 			return
 		}
@@ -481,9 +490,9 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 		if p.checkRule(isSpErr2, 10*time.Minute, deviceID, code+"_sp2", currentTime) {
 			fmt.Printf("[制冷系统预警] %s 触发条件2（过热度异常-机组2）\n", name)
 			fmt.Printf("  - 设备ID: %s\n", deviceID)
-			fmt.Printf("  - 参数值: f2=%d, sp2=%d\n", f2, sp2 )
+			fmt.Printf("  - 参数值: f2=%d, sp2=%d\n", f2, sp2)
 			fmt.Printf("  - 触发条件: 已运行5分钟(%v) && 过热度异常(%v)\n", hasBeenRunning2, isSpErr2)
-			fmt.Printf("  - 过热度范围检查: sp2>200(%v), sp2 < -80(%v)\n", sp2>200, sp2 < -80)
+			fmt.Printf("  - 过热度范围检查: sp2>200(%v), sp2 < -80(%v)\n", sp2 > 200, sp2 < -80)
 			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3})
 		}
 	}
@@ -493,21 +502,30 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 	// ================================================================
 	// 3. 传感器预警 (HVAC_07 ~ HVAC_11)
 	// ================================================================
-	// HVAC_07/08: 温差 > 8℃ -> 持续 5 分钟 (WARN_TEMP_SENSOR)
+	// HVAC_07/08: 温差 > 8℃ -> 持续 8 分钟 (WARN_TEMP_SENSOR)
+	ventModel := wModeU1 == 1 && wModeU2 == 1
 	tempThresh := csRawThreshold("WARN_TEMP_SENSOR", 80)
-	tempDur := csDuration("WARN_TEMP_SENSOR", 5*time.Minute)
+	tempDur := csDuration("WARN_TEMP_SENSOR", 8*time.Minute)
+	ventilationLong := p.checkRule(ventModel, tempDur, deviceID, "ventilation_long", currentTime)
 	fasU1, fasU2 := rawInt(raw, "FasU1"), rawInt(raw, "FasU2")
 	fasValid := fasU1 != 32767 && fasU2 != 32767
-	fasCondition := fasValid && (fasU1-fasU2 > tempThresh || fasU1-fasU2 < -tempThresh)
+	fasCondition := ventilationLong && fasValid && (fasU1-fasU2 > tempThresh || fasU1-fasU2 < -tempThresh)
 	if p.checkRule(fasCondition, tempDur, deviceID, hvacCode(base, 7), currentTime) {
 		hits = append(hits, PredictHit{Code: hvacCode(base, 7), Name: "新风温度传感器预警", Severity: 3,
 			TriggerConditionSnapshot: csTriggerConditionText("WARN_TEMP_SENSOR")})
 	}
 	rasU1, rasU2 := rawInt(raw, "RasU1"), rawInt(raw, "RasU2")
 	rasValid := rasU1 != 32767 && rasU2 != 32767
-	rasCondition := rasValid && (rasU1-rasU2 > tempThresh || rasU1-rasU2 < -tempThresh)
+	rasCondition := ventilationLong && rasValid && (rasU1-rasU2 > tempThresh || rasU1-rasU2 < -tempThresh)
 	if p.checkRule(rasCondition, tempDur, deviceID, hvacCode(base, 8), currentTime) {
 		hits = append(hits, PredictHit{Code: hvacCode(base, 8), Name: "回风温度传感器预警", Severity: 3,
+			TriggerConditionSnapshot: csTriggerConditionText("WARN_TEMP_SENSOR")})
+	}
+	tveh1, tveh2 := rawInt(raw, "Tveh1"), rawInt(raw, "Tveh2")
+	tvehValid := tveh1 != 32767 && tveh2 != 32767
+	tvehCondition := ventilationLong && tvehValid && (tveh1-tveh2 > tempThresh || tveh1-tveh2 < -tempThresh)
+	if p.checkRule(tvehCondition, tempDur, deviceID, hvacCode(base, 76), currentTime) {
+		hits = append(hits, PredictHit{Code: hvacCode(base, 76), Name: "车厢温度传感器预警", Severity: 3,
 			TriggerConditionSnapshot: csTriggerConditionText("WARN_TEMP_SENSOR")})
 	}
 
@@ -519,7 +537,6 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 	// 条件3：回风温度(RasU) > 制冷目标温度 + delta，持续 > duration_seconds
 	coolingSystemFaulty :=
 		rawBool(raw, "BfltPowersupplyU1") || rawBool(raw, "BfltPowersupplyU2") ||
-			rawBool(raw, "BfltTempover") ||
 			rawBool(raw, "BlpfltCompU11") || rawBool(raw, "BlpfltCompU12") ||
 			rawBool(raw, "BlpfltCompU21") || rawBool(raw, "BlpfltCompU22") ||
 			rawBool(raw, "BscfltCompU11") || rawBool(raw, "BscfltCompU12") ||
@@ -530,12 +547,14 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 			rawBool(raw, "BfltLowpresU21") || rawBool(raw, "BfltLowpresU22") ||
 			rawBool(raw, "BfltVfdU11") || rawBool(raw, "BfltVfdU12") ||
 			rawBool(raw, "BfltVfdU21") || rawBool(raw, "BfltVfdU22")
-	overtempThresh := csOvertempAbsThreshold("WARN_CABIN_OVERHEAT", 300)
+	overtempDelta := csRawThreshold("WARN_CABIN_OVERHEAT", 40) // 允许回风超出客室的阈值 (原始单位)
 	overtempDur := csDuration("WARN_CABIN_OVERHEAT", 2*time.Minute)
 	coolingPrecondDur := csCoolingPreconditionDur("WARN_CABIN_OVERHEAT", 20*time.Minute)
 	coolingNormal := !coolingSystemFaulty && (wModeU1 == 2 || wModeU1 == 3 || wModeU2 == 2 || wModeU2 == 3)
 	sysRunningLong := p.checkRule(coolingNormal, coolingPrecondDur, deviceID, "cooling_normal_20", currentTime)
-	isOvertemp := sysRunningLong && (rawInt(raw, "RasU1") > overtempThresh || rawInt(raw, "RasU2") > overtempThresh)
+	ticTemp := rawInt(raw, "Tic")             // 客室温度 (实时)
+	overtempThresh := ticTemp + overtempDelta // 动态阈值 = 客室温度 + 允许超出量
+	isOvertemp := sysRunningLong && (rawInt(raw, "RasSys") > overtempThresh)
 	if p.checkRule(isOvertemp, overtempDur, deviceID, hvacCode(base, 9), currentTime) {
 		hits = append(hits, PredictHit{Code: hvacCode(base, 9), Name: "车厢温度超温预警", Severity: 3,
 			TriggerConditionSnapshot: csTriggerConditionText("WARN_CABIN_OVERHEAT")})

@@ -283,7 +283,7 @@ func inferWarnCode(faultCode string) string {
 		return "WARN_REFRIGERANT_LEAK_COOLING"
 	case seq >= 5 && seq <= 6:
 		return "WARN_COOLING_SYSTEM"
-	case seq >= 7 && seq <= 8:
+	case seq >= 7 && seq <= 8 || seq == 76:
 		return "WARN_TEMP_SENSOR"
 	case seq == 9:
 		return "WARN_CABIN_OVERHEAT"

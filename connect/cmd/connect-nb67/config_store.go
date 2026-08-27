@@ -154,14 +154,14 @@ func (cs *ConfigStore) load() error {
 	cs.logger.Debugf("ConfigStore: 已加载 %d 条预警配置", len(m))
 	
 	// 输出关键预警的持续时间配置（便于调试）
-	if e, ok := m["WARN_EF_CURRENT"]; ok {
-		cs.logger.Infof("ConfigStore[WARN_EF_CURRENT]: enabled=%v, duration=%ds, threshold=%f, clear=%f", 
-			e.Enabled, e.DurationSeconds, e.TriggerValue, e.ClearValue)
-	}
-	if e, ok := m["WARN_CF_CURRENT"]; ok {
-		cs.logger.Infof("ConfigStore[WARN_CF_CURRENT]: enabled=%v, duration=%ds, threshold=%f, clear=%f", 
-			e.Enabled, e.DurationSeconds, e.TriggerValue, e.ClearValue)
-	}
+	// if e, ok := m["WARN_EF_CURRENT"]; ok {
+	// 	cs.logger.Infof("ConfigStore[WARN_EF_CURRENT]: enabled=%v, duration=%ds, threshold=%f, clear=%f", 
+	// 		e.Enabled, e.DurationSeconds, e.TriggerValue, e.ClearValue)
+	// }
+	// if e, ok := m["WARN_CF_CURRENT"]; ok {
+	// 	cs.logger.Infof("ConfigStore[WARN_CF_CURRENT]: enabled=%v, duration=%ds, threshold=%f, clear=%f", 
+	// 		e.Enabled, e.DurationSeconds, e.TriggerValue, e.ClearValue)
+	// }
 	return nil
 }
 

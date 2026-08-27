@@ -18,7 +18,7 @@ var oldSeqToNewCode = map[int]string{
 	16: "HVAC110", 17: "HVAC111", 18: "HVAC110", 19: "HVAC111",
 	20: "HVAC112",
 	21: "HVAC113", 22: "HVAC114", 23: "HVAC113", 24: "HVAC114",
-	25: "HVAC115", 26: "HVAC115",
+	25: "HVAC115", 26: "HVAC115", 76: "HVAC116",
 }
 
 // platformHvacCode converts an internal HVAC code (HVAC{carriage*100+seq}) to
@@ -52,7 +52,7 @@ var predictSeqToLocation = map[int]string{
 	3: "空调机组2", 4: "空调机组2",
 	5: "空调机组1", 6: "空调机组2",
 	7: "空调机组1&2", 8: "空调机组1&2",
-	9: "空调机组1&2", // 车厢超温 — PHM v2 HVAC106 location
+	9:  "空调机组1&2", // 车厢超温 — PHM v2 HVAC106 location
 	10: "空调机组1", 11: "空调机组2",
 	12: "空调机组1", 13: "空调机组1",
 	14: "空调机组2", 15: "空调机组2",
@@ -62,6 +62,7 @@ var predictSeqToLocation = map[int]string{
 	21: "空调机组1", 22: "空调机组1",
 	23: "空调机组2", 24: "空调机组2",
 	25: "空调机组1", 26: "空调机组2",
+	76: "空调机组1&2",
 }
 
 // alarmSeqToLocation maps alarm seq (27-75) to location string.
@@ -150,6 +151,7 @@ var alertcodeLocationMap = map[string]string{
 	"HVAC124": "空调机组2",
 	"HVAC125": "空调机组1",
 	"HVAC126": "空调机组2",
+	"HVAC176": "空调机组1&2",
 	"HVAC201": "空调机组1",
 	"HVAC202": "空调机组1",
 	"HVAC203": "空调机组2",
@@ -176,6 +178,7 @@ var alertcodeLocationMap = map[string]string{
 	"HVAC224": "空调机组2",
 	"HVAC225": "空调机组1",
 	"HVAC226": "空调机组2",
+	"HVAC276": "空调机组1&2",
 	"HVAC301": "空调机组1",
 	"HVAC302": "空调机组1",
 	"HVAC303": "空调机组2",
@@ -202,6 +205,7 @@ var alertcodeLocationMap = map[string]string{
 	"HVAC324": "空调机组2",
 	"HVAC325": "空调机组1",
 	"HVAC326": "空调机组2",
+	"HVAC376": "空调机组1&2",
 	"HVAC401": "空调机组1",
 	"HVAC402": "空调机组1",
 	"HVAC403": "空调机组2",
@@ -228,6 +232,7 @@ var alertcodeLocationMap = map[string]string{
 	"HVAC424": "空调机组2",
 	"HVAC425": "空调机组1",
 	"HVAC426": "空调机组2",
+	"HVAC476": "空调机组1&2",
 	"HVAC501": "空调机组1",
 	"HVAC502": "空调机组1",
 	"HVAC503": "空调机组2",
@@ -254,6 +259,7 @@ var alertcodeLocationMap = map[string]string{
 	"HVAC524": "空调机组2",
 	"HVAC525": "空调机组1",
 	"HVAC526": "空调机组2",
+	"HVAC576": "空调机组1&2",
 	"HVAC601": "空调机组1",
 	"HVAC602": "空调机组1",
 	"HVAC603": "空调机组2",
@@ -280,6 +286,7 @@ var alertcodeLocationMap = map[string]string{
 	"HVAC624": "空调机组2",
 	"HVAC625": "空调机组1",
 	"HVAC626": "空调机组2",
+	"HVAC676": "空调机组1&2",
 }
 
 // alertcodeFaultNameMap is retained for reference but no longer sent to the platform.
@@ -311,6 +318,7 @@ var alertcodeFaultNameMap = map[string]string{
 	"HVAC124": "机组2压缩机2电流预警",
 	"HVAC125": "机组1空气质量预警",
 	"HVAC126": "机组2空气质量预警",
+	"HVAC176": "车厢温度传感器预警",
 	"HVAC201": "机组1系统1冷媒泄露预警",
 	"HVAC202": "机组1系统2冷媒泄露预警",
 	"HVAC203": "机组2系统1冷媒泄露预警",
@@ -337,6 +345,7 @@ var alertcodeFaultNameMap = map[string]string{
 	"HVAC224": "机组2压缩机2电流预警",
 	"HVAC225": "机组1空气质量预警",
 	"HVAC226": "机组2空气质量预警",
+	"HVAC276": "车厢温度传感器预警",
 	"HVAC301": "机组1系统1冷媒泄露预警",
 	"HVAC302": "机组1系统2冷媒泄露预警",
 	"HVAC303": "机组2系统1冷媒泄露预警",
@@ -363,6 +372,7 @@ var alertcodeFaultNameMap = map[string]string{
 	"HVAC324": "机组2压缩机2电流预警",
 	"HVAC325": "机组1空气质量预警",
 	"HVAC326": "机组2空气质量预警",
+	"HVAC376": "车厢温度传感器预警",
 	"HVAC401": "机组1系统1冷媒泄露预警",
 	"HVAC402": "机组1系统2冷媒泄露预警",
 	"HVAC403": "机组2系统1冷媒泄露预警",
@@ -389,6 +399,7 @@ var alertcodeFaultNameMap = map[string]string{
 	"HVAC424": "机组2压缩机2电流预警",
 	"HVAC425": "机组1空气质量预警",
 	"HVAC426": "机组2空气质量预警",
+	"HVAC476": "车厢温度传感器预警",
 	"HVAC501": "机组1系统1冷媒泄露预警",
 	"HVAC502": "机组1系统2冷媒泄露预警",
 	"HVAC503": "机组2系统1冷媒泄露预警",
@@ -415,6 +426,7 @@ var alertcodeFaultNameMap = map[string]string{
 	"HVAC524": "机组2压缩机2电流预警",
 	"HVAC525": "机组1空气质量预警",
 	"HVAC526": "机组2空气质量预警",
+	"HVAC576": "车厢温度传感器预警",
 	"HVAC601": "机组1系统1冷媒泄露预警",
 	"HVAC602": "机组1系统2冷媒泄露预警",
 	"HVAC603": "机组2系统1冷媒泄露预警",
@@ -441,6 +453,7 @@ var alertcodeFaultNameMap = map[string]string{
 	"HVAC624": "机组2压缩机2电流预警",
 	"HVAC625": "机组1空气质量预警",
 	"HVAC626": "机组2空气质量预警",
+	"HVAC676": "车厢温度传感器预警",
 }
 
 // locationByCode returns the location string for a given HVAC code.
