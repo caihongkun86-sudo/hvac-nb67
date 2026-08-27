@@ -28,7 +28,9 @@
                         <el-date-picker v-model="filterForm.timeRange" type="datetimerange"
                             range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间"
                             format="YYYY-MM-DD HH:mm:ss" value-format="YYYY-MM-DD HH:mm:ss"
-                            :shortcuts="shortcuts" />
+                            :shortcuts="shortcuts"
+                            :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 1, 1, 23, 59, 59)]"
+                        />
                     </el-form-item>
                     <el-form-item>
                         <el-button type="primary" class="nav-btn" icon="Search" @click="handleQuery">查询</el-button>
@@ -215,29 +217,33 @@ const showDetail = async (row) => {
                 return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`
             })
             // 找最接近预警时刻的 x 轴索引，用于标注竖线
-            const triggerLabel = (() => {
-                const t = new Date(triggerTime || row.start_time)
-                return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`
-            })()
-            let triggerIdx = timeAxis.findIndex(l => l >= triggerLabel)
-            if (triggerIdx === -1) triggerIdx = timeAxis.length - 1
-            const series = params.map((p, i) => ({
-                name: p.label,
-                type: 'line',
-                smooth: true,
-                showSymbol: false,
-                data: data.map(d => d[p.key] ?? null),
-                lineStyle: { color: COLORS[i % COLORS.length], width: 2 },
-                ...(i === 0 ? {
-                    markLine: {
-                        silent: true,
-                        data: [{ xAxis: triggerIdx }],
-                        lineStyle: { color: '#e65355', type: 'dashed', width: 2 },
-                        label: { show: true, formatter: '预警时刻', color: '#e65355', position: 'insideEndTop', fontSize: 11 },
-                        symbol: ['none', 'none']
-                    }
-                } : {})
-            }))
+            const triggerTs = new Date(triggerTime || row.start_time).getTime()
+            const bucketTimestamps = data.map(d => new Date(d.bucket).getTime())
+            // 找第一个 >= triggerTs 的索引
+            let triggerIdx = bucketTimestamps.findIndex(ts => ts >= triggerTs)
+            if (triggerIdx === -1) triggerIdx = bucketTimestamps.length - 1
+            const series = params.map((p, i) => {
+                const color = COLORS[i % COLORS.length]
+                return {
+                    name: p.label,
+                    type: 'line',
+                    smooth: true,
+                    showSymbol: false,
+                    data: data.map(d => d[p.key] ?? null),
+                    color,                          // 图例圆点颜色（优先级最高）
+                    itemStyle: { color },           // 数据项颜色（兼容旧版 ECharts）
+                    lineStyle: { color, width: 2 }, // 线条颜色
+                    ...(i === 0 ? {
+                        markLine: {
+                            silent: true,
+                            data: [{ xAxis: triggerIdx }],
+                            lineStyle: { color: '#e65355', type: 'dashed', width: 2 },
+                            label: { show: true, formatter: '预警时刻', color: '#e65355', position: 'insideEndTop', fontSize: 11 },
+                            symbol: ['none', 'none']
+                        }
+                    } : {})
+                }
+            })
             nextTick(() => {
                 if (!detailChart && detailChartRef.value) detailChart = echarts.init(detailChartRef.value)
                 if (detailChart) {
@@ -284,13 +290,18 @@ onMounted(() => fetchData())
     height:50px; display:flex; justify-content:space-between; align-items:center;
     padding:0 20px;
     background: linear-gradient(180deg, #181f30 0%, #0a0f1d 100%);
-    position:sticky; top:0; z-index:1000;
-    border-bottom:1px solid rgba(33,134,207,0.2);
-    .header-left { display:flex; align-items:center; gap:8px; }
-    .header-right .filter-form {
-        display:flex; align-items:center;
-        :deep(.el-form-item) { margin-bottom:0!important; margin-right:10px!important; }
-        :deep(.el-form-item__label) { color:#2186cf; font-weight:bold; font-size:13px; }
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    border-bottom: 1px solid rgba(33, 134, 207, 0.2);
+    .header-left { display: flex; align-items: center; gap: 15px; }
+    .header-right {
+        .filter-form {
+            display: flex;
+            align-items: center;
+            :deep(.el-form-item) { margin-bottom: 0 !important; margin-right: 24px !important; display: flex; align-items: center; }
+            :deep(.el-form-item__label) { color: #2186cf; font-weight: bold; padding-right: 6px; white-space: nowrap; font-size: 13px; }
+        }
     }
 }
 .monitor-container { padding:15px; }
@@ -372,7 +383,8 @@ onMounted(() => fetchData())
         .el-button {
             background: #0a0f1d !important; border: 1px solid #2186cf !important; color: #ffffff !important;
             height: 28px !important; padding: 0 12px !important; font-size: 12px !important;
-            &--primary { background: #2186cf !important; border-color: #2186cf !important; }
+            &.is-text { border: 1px solid #2186cf !important; }
+            &--primary { background: #2186cf !important; border-color: #2186cf !important; &:hover { background: #409eff !important; border-color: #409eff !important; } }
             &:hover { background: rgba(33,134,207,0.2) !important; border-color: #409eff !important; color: #ffffff !important; }
         }
     }
@@ -390,6 +402,15 @@ onMounted(() => fetchData())
     }
     .el-pagination__total, .el-pagination__jump { color: #d1d9e7 !important; }
     .el-pager li { background: transparent !important; color: #d1d9e7 !important; &.is-active { color: #2186cf !important; font-weight: bold; } }
+}
+
+/* 强制多选框选中选项为透明背景 */
+.el-select__selected-item,
+.el-tag.el-tag--info {
+    background-color: rgba(33,134,207,0.2) !important;
+    border-color: #2186cf !important;
+    color: #ffffff !important;
+    .el-tag__close { color: #ffffff !important; }
 }
 
 /* 预警详情弹窗暗色（teleport 到 body，必须全局） */

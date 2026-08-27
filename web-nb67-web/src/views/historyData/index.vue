@@ -36,6 +36,10 @@
                             value-format="YYYY-MM-DD HH:mm:ss"
                             :disabled-date="disabledDate"
                             @calendar-change="onCalendarChange"
+                            :shortcuts="shortcuts"
+                            :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 1, 1, 23, 59, 59)]"
+                            teleported
+                            popper-class="history-data-picker"
                         />
                     </el-form-item>
                     <el-form-item>
@@ -99,9 +103,21 @@
                     <el-table-column prop="dwcp_op_tm1"     label="压缩机时间1(秒)"     width="135" show-overflow-tooltip />
                     <el-table-column prop="dwcp_op_tm2"     label="压缩机时间2(秒)"     width="135" show-overflow-tooltip />
                     <el-table-column prop="dwexufan_op_tm"  label="废排风机时间(秒)"    width="135" show-overflow-tooltip />
-                    <el-table-column prop="dwfad_op_cnt"    label="新风阀开度(%)"       width="120" show-overflow-tooltip />
-                    <el-table-column prop="dwrad_op_cnt"    label="回风阀开度(%)"       width="120" show-overflow-tooltip />
-                    <el-table-column prop="dmp_exu_pos"     label="废排风阀开度(%)"     width="130" show-overflow-tooltip />
+                    <el-table-column prop="dwfad_op_cnt"    width="140" show-overflow-tooltip>
+                        <template #header>
+                            <HeaderTip tip="时间开度值(s)=百分比开度值(%)*35(s)(整数位取整)">新风阀开度(%)</HeaderTip>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="dwrad_op_cnt"    width="140" show-overflow-tooltip>
+                        <template #header>
+                            <HeaderTip tip="时间开度值(s)=百分比开度值(%)*35(s)(整数位取整)">回风阀开度(%)</HeaderTip>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="dmp_exu_pos"     width="150" show-overflow-tooltip>
+                        <template #header>
+                            <HeaderTip tip="时间开度值(s)=百分比开度值(%)*35(s)(整数位取整)">废排风阀开度(%)</HeaderTip>
+                        </template>
+                    </el-table-column>
                     <el-table-column prop="i_sp_u1"     label="过热度1(K)"     width="110" show-overflow-tooltip />
                     <el-table-column prop="i_sp_u2"     label="过热度2(K)"     width="110" show-overflow-tooltip />
                     <el-table-column prop="i_co2"           label="CO₂(ppm)"           width="110" show-overflow-tooltip />
@@ -141,20 +157,38 @@
 
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted, watch, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getTrainDataApi } from '@/api/api'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElTooltip, ElIcon } from 'element-plus'
+import { InfoFilled } from '@element-plus/icons-vue'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import { getStationName } from '@/config/stationMap.js'
 import { getModelName } from '@/config/modelMap.js'
 
+// 表头提示组件：在表头文字后追加 i 图标，hover 显示说明
+const HeaderTip = (props, { slots }) => h(
+    ElTooltip,
+    { content: props.tip, placement: 'top', effect: 'dark', 'show-after': 200 },
+    () => h('span', { class: 'header-with-tip' }, [
+        slots.default?.(),
+        h(ElIcon, { class: 'tip-icon' }, () => h(InfoFilled))
+    ])
+)
+HeaderTip.props = ['tip']
+
 const router = useRouter()
 const route = useRoute()
 
 const CARRIAGE_MAP = { '1':'TC1','2':'MP1','3':'M1','4':'M2','5':'MP2','6':'TC2' }
+
+const shortcuts = [
+    { text: '最近1小时',  value: () => [dayjs().subtract(1,'hour').format('YYYY-MM-DD HH:mm:ss'), dayjs().format('YYYY-MM-DD HH:mm:ss')] },
+    { text: '最近24小时', value: () => [dayjs().subtract(24,'hour').format('YYYY-MM-DD HH:mm:ss'), dayjs().format('YYYY-MM-DD HH:mm:ss')] },
+    { text: '最近7天',    value: () => [dayjs().subtract(7,'day').format('YYYY-MM-DD HH:mm:ss'), dayjs().format('YYYY-MM-DD HH:mm:ss')] },
+]
 
 const filterForm = reactive({
     trainNo: String(parseInt(String(route.query.trainNo || '7001')) || 7001),
@@ -185,8 +219,8 @@ const pickerFirstDate = ref(null)
 const disabledDate = (time) => {
     if (!pickerFirstDate.value) return false
     const first = dayjs(pickerFirstDate.value)
-    const min = first.subtract(7, 'day').startOf('day')
-    const max = first.add(7, 'day').endOf('day')
+    const min = first.subtract(6, 'day').startOf('day')
+    const max = first.add(6, 'day').endOf('day')
     return time.getTime() < min.valueOf() || time.getTime() > max.valueOf()
 }
 const onCalendarChange = ([start]) => {
@@ -386,7 +420,7 @@ onMounted(() => {
             align-items: center;
             :deep(.el-form-item) {
                 margin-bottom: 0 !important;
-                margin-right: 12px !important;
+                margin-right: 24px !important;
                 display: flex;
                 align-items: center;
             }
@@ -654,7 +688,8 @@ onMounted(() => {
 
 /* 下拉菜单 & 日期弹窗 */
 .el-select__popper.el-popper,
-.el-picker__popper.el-popper {
+.el-picker__popper.el-popper,
+.history-data-picker.el-popper {
     background-color: #141a2e !important;
     border: 1px solid #2186cf !important;
     box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
@@ -666,7 +701,11 @@ onMounted(() => {
         &.selected { color: #2186cf !important; font-weight: bold; background-color: rgba(33, 134, 207, 0.1) !important; }
     }
 
-    .el-picker-panel { background-color: #141a2e !important; color: #fff !important; border: none !important; }
+    .el-picker-panel {
+        background-color: #141a2e !important;
+        color: #fff !important;
+        border: none !important;
+    }
 
     .el-date-range-picker__time-header,
     .el-date-range-picker__header {
@@ -679,8 +718,59 @@ onMounted(() => {
     .el-date-table td.next-month, .el-date-table td.prev-month { color: #4e5969 !important; }
     .el-date-table td.available:hover { color: #2186cf !important; }
     .el-date-table td.in-range .el-date-table-cell { background-color: rgba(33, 134, 207, 0.1) !important; }
-    .el-time-panel { background-color: #141a2e !important; border: 1px solid #2186cf !important; }
-    .el-time-spinner__item { color: #d1d9e7 !important; &:hover { background: rgba(33, 134, 207, 0.2) !important; } &.is-active { color: #2186cf !important; font-weight: bold; } }
+    /* 禁用日期：字体灰色、背景与正常日期一致（保持透明）、不可点击 */
+    .el-date-table td.disabled,
+    .el-date-table td.disabled:hover {
+        background-color: transparent !important;
+        cursor: not-allowed !important;
+        .el-date-table-cell,
+        .cell {
+            color: #4e5969 !important;
+            background-color: transparent !important;
+        }
+    }
+    /* 时间面板：紧凑布局，避免超出视口右侧 */
+    .el-time-panel {
+        background-color: #141a2e !important;
+        border: 1px solid #2186cf !important;
+        width: 150px !important;
+        max-width: 150px !important;
+        box-sizing: border-box !important;
+        padding: 4px 0 !important;
+    }
+    .el-time-panel__content {
+        padding: 0 !important;
+        display: flex !important;
+        justify-content: center !important;
+    }
+    .el-time-spinner {
+        display: flex !important;
+        justify-content: center !important;
+    }
+    /* 三列均匀分布，整体居中 */
+    .el-time-spinner__wrapper {
+        flex: 1 1 0 !important;
+        width: auto !important;
+        max-width: 48px !important;
+        box-sizing: border-box !important;
+        text-align: center !important;
+        & + .el-time-spinner__wrapper { margin-left: 0 !important; }
+    }
+    .el-time-spinner__item {
+        height: 28px !important;
+        line-height: 28px !important;
+        padding: 0 !important;
+        font-size: 12px !important;
+        text-align: center !important;
+        color: #d1d9e7 !important;
+        &:hover { background: rgba(33, 134, 207, 0.2) !important; }
+        &.is-active { color: #2186cf !important; font-weight: bold; }
+    }
+    .el-time-spinner__arrow {
+        font-size: 12px !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+    }
     .el-picker-panel__footer {
         background-color: #141a2e !important;
         border-top: 1px solid #262e45 !important;
@@ -695,6 +785,29 @@ onMounted(() => {
             &--primary { background: #2186cf !important; border-color: #2186cf !important; &:hover { background: #409eff !important; } }
             &:hover { background: rgba(33, 134, 207, 0.2) !important; border-color: #409eff !important; }
         }
+    }
+}
+
+/* 强制多选框选中选项为透明背景 */
+.el-select__selected-item,
+.el-tag.el-tag--info {
+    background-color: rgba(33,134,207,0.2) !important;
+    border-color: #2186cf !important;
+    color: #ffffff !important;
+    .el-tag__close { color: #ffffff !important; }
+}
+
+/* 表头说明图标：i 图标 + hover 提示 */
+.header-with-tip {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px;
+    cursor: help;
+
+    .tip-icon {
+        color: #2186cf;
+        font-size: 14px;
+        &:hover { color: #409eff; }
     }
 }
 </style>

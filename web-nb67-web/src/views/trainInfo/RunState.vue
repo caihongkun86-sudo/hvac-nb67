@@ -25,7 +25,14 @@
 
                 <!-- 数据行 -->
                 <div v-for="row in rows" :key="row.key" class="table-row flex-row">
-                    <div class="cell label-cell">{{ row.label }}</div>
+                    <div class="cell label-cell">
+                        <span class="label-content">
+                            {{ row.label }}
+                            <el-tooltip v-if="row.tip" :content="row.tip" placement="top" effect="dark" :show-after="200">
+                                <el-icon class="label-tip-icon"><InfoFilled /></el-icon>
+                            </el-tooltip>
+                        </span>
+                    </div>
                     <div v-for="n in 6" :key="n" class="cell car-group">
                         <div class="unit-data-pair">
                             <div :class="['unit-val', getValClass(n, 1, row)]">
@@ -45,6 +52,7 @@
 <script setup>
 import { ref, onMounted, watch, onUnmounted } from 'vue'
 import { getRunningState } from '@/api/api'
+import { InfoFilled } from '@element-plus/icons-vue'
 
 const props = defineProps({
     trainId:   { type: String, default: '' },
@@ -67,8 +75,8 @@ const rows = [
     { label: 'TVOC',   key: 'aq_tvoc',  suffix: 'ppb', isAQ: true },
     { label: 'PM2.5',  key: 'aq_pm25',  suffix: 'µg/m³', isAQ: true },
     { label: 'PM10',   key: 'aq_pm10',  suffix: 'µg/m³', isAQ: true },
-    { label: '空气温度', key: 'aq_t',   suffix: '℃', isAQ: true },
-    { label: '空气湿度', key: 'aq_h',   suffix: 'RH%', isAQ: true },
+    { label: '回风温度', key: 'aq_t',   suffix: '℃', isAQ: true, tip: '车厢平均温度' },
+    { label: '空气湿度', key: 'aq_h',   suffix: 'RH%', isAQ: true, tip: '此数据由空气质量模块测量' },
 ]
 
 // 对称逻辑：1-3车(1,2), 4-6车(2,1)
@@ -163,7 +171,7 @@ const getVal = (carIdx, pos, row) => {
         const keyMap = {
             'aq_co2': `AqCo2${suffix}`, 'aq_tvoc': `AqTvoc${suffix}`,
             'aq_pm25': `AqPm25${suffix}`, 'aq_pm10': `AqPm10${suffix}`,
-            'aq_t': `AqT${suffix}`, 'aq_h': `AqH${suffix}`
+            'aq_t': `RasSys`, 'aq_h': `AqH${suffix}`
         }
         const rawKey = keyMap[row.key]
         const val = rawKey ? carData[rawKey] : undefined
@@ -312,6 +320,18 @@ onUnmounted(() => {
         font-size: 13px;
         font-weight: bold;
         align-items: center;
+
+        .label-content {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .label-tip-icon {
+            color: #2186cf;
+            font-size: 12px;
+            cursor: help;
+            &:hover { color: #409eff; }
+        }
     }
 
     .table-header {
