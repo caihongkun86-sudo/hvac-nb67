@@ -51,6 +51,7 @@ export class StatusRepository {
                     .selectFrom('hvac.fact_raw')
                     .select(['train_id', 'device_id', 'payload_json'])
                     .distinctOn('device_id')
+                    .where(this.timeCol as any, '>', sql`now() - interval '24 hours'`)
                     .orderBy('device_id')
                     .orderBy(this.timeCol as any, 'desc')
                 )
@@ -120,6 +121,7 @@ export class StatusRepository {
             .distinctOn(['train_id', 'carriage_id' as any, 'fault_code'])
             .where('event_type', '=', 'alarm')
             .where('recovery_time', 'is', null)
+            .where(this.timeCol as any, '>', sql`now() - interval '24 hours'`)
             .orderBy('train_id')
             .orderBy('carriage_id' as any)
             .orderBy('fault_code')
@@ -156,7 +158,7 @@ export class StatusRepository {
             return 'WARN_REFRIGERANT_LEAK_COOLING';
         }
         if (seq >= 5  && seq <= 6)  return 'WARN_COOLING_SYSTEM';
-        if (seq >= 7  && seq <= 8)  return 'WARN_TEMP_SENSOR';
+        if (seq >= 7  && seq <= 8 || seq === 76)  return 'WARN_TEMP_SENSOR';
         if (seq === 9)               return 'WARN_CABIN_OVERHEAT';
         if (seq >= 10 && seq <= 11) return 'WARN_FILTER_CLOG';
         if (seq >= 12 && seq <= 15) return 'WARN_EF_CURRENT';
@@ -230,6 +232,7 @@ export class StatusRepository {
                 .selectFrom('hvac.fact_raw')
                 .select(['train_id', 'carriage_id', 'device_id', 'payload_json'])
                 .where('train_id', '=', trainId)
+                .where(this.timeCol as any, '>', sql`now() - interval '1 hours'`)
                 .distinctOn('device_id')
                 .orderBy('device_id')
                 .orderBy(this.timeCol as any, 'desc')
@@ -238,15 +241,27 @@ export class StatusRepository {
             .select([
                 'carriage_id as carriage_no',
                 sql<number>`SUM(
-                    (SELECT count(*) FROM jsonb_each_text(payload_json->'raw') 
-                     WHERE (key ILIKE 'Bflt%' OR key ILIKE 'Blp%' OR key ILIKE 'Bsc%' OR key ILIKE 'Boc%') 
+                    (SELECT count(*) FROM jsonb_each_text(payload_json->'raw')
+                     WHERE (key ILIKE 'Bflt%' OR key ILIKE 'Blp%' OR key ILIKE 'Bsc%' OR key ILIKE 'Boc%')
                      AND value = 'true'
                      AND NOT EXISTS (
-                         SELECT 1 FROM hvac.dim_alarm_mask m 
+                         SELECT 1 FROM hvac.dim_alarm_mask m
                          WHERE m.device_id = latest_status.device_id AND m.fault_code = key
                      ))
                 )`.as('alarm_count')
             ])
+            .groupBy('carriage_id')
+            .execute();
+
+        const warningStatuses = await db
+            .selectFrom('hvac.warning_lifecycle')
+            .select([
+                'carriage_id as carriage_no',
+                sql<number>`COUNT(*)`.as('warning_count')
+            ])
+            .where('train_id', '=', trainId)
+            .where('start_time', '>', sql`now() - interval '24 hours'`)
+            .where('end_time', 'is', null)
             .groupBy('carriage_id')
             .execute();
 
@@ -255,7 +270,10 @@ export class StatusRepository {
                 carriage_no: `${trainId}0${s.carriage_no}`,
                 alarm_count: Number(s.alarm_count)
             })),
-            vw_carriage_predict_status: [] // 预警先返回空
+            vw_carriage_predict_status: warningStatuses.map(s => ({
+                carriage_no: `${trainId}0${s.carriage_no}`,
+                warning_count: Number(s.warning_count)
+            }))
         };
     }
 
@@ -267,6 +285,7 @@ export class StatusRepository {
             .selectFrom('hvac.fact_raw')
             .selectAll()
             .where('train_id', '=', trainId)
+            .where(this.timeCol as any, '>', sql`now() - interval '1 hour'`)
             .distinctOn('carriage_id')
             .orderBy('carriage_id')
             .orderBy(this.timeCol as any, 'desc')
@@ -296,6 +315,7 @@ export class StatusRepository {
                 eb('carriage_id', '=', parseInt(carriageId))
             ]))
             .where('train_id', '=', trainId)
+            .where(this.timeCol as any, '>', sql`now() - interval '1 hour'`)
             .orderBy(this.timeCol as any, 'desc')
             .limit(1)
             .executeTakeFirst();
@@ -316,18 +336,31 @@ export class StatusRepository {
         const trainId = parseInt(carriageId.slice(0, 4));
         const carNo = parseInt(carriageId.slice(-2));
 
-        // 1. 获取该车厢最新的原始报文快照
-        const latestRaw = await db
-            .selectFrom('hvac.fact_raw')
-            .select(['payload_json'])
-            .where('train_id', '=', trainId)
-            .where((eb) => eb.or([
-                eb('carriage_id', '=', carNo),
-                eb('carriage_id', '=', parseInt(carriageId))
-            ]))
-            .orderBy(this.timeCol as any, 'desc')
-            .limit(1)
-            .executeTakeFirst();
+        // 1. 分层回退查询：1小时 → 1天 → 7天 → 300天
+        const timeRanges = [
+            sql`now() - interval '1 day'`,
+            sql`now() - interval '7 days'`,
+            sql`now() - interval '15 days'`,
+            sql`now() - interval '300 days'`,
+        ];
+
+        let latestRaw = null;
+        for (const range of timeRanges) {
+            latestRaw = await db
+                .selectFrom('hvac.fact_raw')
+                .select(['payload_json'])
+                .where('train_id', '=', trainId)
+                .where((eb) => eb.or([
+                    eb('carriage_id', '=', carNo),
+                    eb('carriage_id', '=', parseInt(carriageId))
+                ]))
+                .where(this.timeCol as any, '>', range)
+                .orderBy(this.timeCol as any, 'desc')
+                .limit(1)
+                .executeTakeFirst();
+
+            if (latestRaw) break; // 命中即返回，不再扩大范围
+        }
 
         // 如果没有数据，返回空列表
         if (!latestRaw || !latestRaw.payload_json || !latestRaw.payload_json.raw) {
@@ -493,10 +526,10 @@ export class StatusRepository {
                 .orderBy(this.timeCol as any, 'desc')
                 .orderBy('event_time', 'desc')
                 .orderBy('fault_code', 'asc')
-                .limit(5000)
+                .limit(50000)
                 .execute();
 
-            const GAP_MS = 60_000;
+            const GAP_MS = 300_000;
             const tCol = this.timeCol;
             // 按 key + 时间正序构造发作岛
             const asc = [...rawAll].sort((a: any, b: any) => {
@@ -537,7 +570,7 @@ export class StatusRepository {
                     recovery = i.row.recovery_time;
                 } else if (lastIslandIdxByKey.get(i.key) !== idx) {
                     recovery = i.lastSeen;        // 此岛后面还有同 key 新岛，必定已结束
-                } else if (nowMs - i.lastSeen.getTime() > 60_000) {
+                } else if (nowMs - i.lastSeen.getTime() > 300_000) {
                     recovery = i.lastSeen;        // 最新岛但已超 60s 无新帧 → 视为结束
                 } else {
                     recovery = null;              // 仍活跃
@@ -686,10 +719,7 @@ export class StatusRepository {
                 const start = new Date(params.startTime);
                 if (!isNaN(start.getTime())) {
                     // 生命周期与窗口有重叠：end_time IS NULL 或 end_time >= window_start
-                    q = q.where((eb: any) => eb.or([
-                        eb('e.end_time' as any, 'is', null),
-                        eb('e.end_time' as any, '>=', start),
-                    ]));
+                    q = q.where('e.start_time' as any, '>=', start);
                 }
             }
             if (params.endTime) {
@@ -810,12 +840,18 @@ export class StatusRepository {
         // JS 层机组过滤（sql raw 在此版本 Kysely where 中无法生效）
         if (params.unitNames && params.unitNames.length === 1) {
             const unit = params.unitNames[0];
-            const u1Seqs = new Set([1,3,5,7,9,10,12,13,16,17,20,21,22,25]);
-            const u2Seqs = new Set([2,4,6,8,11,14,15,18,19,23,24,26]);
+            // 机组一级别预警
+            const u1Seqs = new Set([1,3,5,10,12,13,16,17,21,22,25]);
+            // 机组二级别预警
+            const u2Seqs = new Set([2,4,6,11,14,15,18,19,23,24,26]);
+            // 车厢级预警（不属于任何机组，选择特定机组时应排除）
+            const carriageLevelSeqs = new Set([7,8,9,20,76]);
             list = list.filter((row: any) => {
                 const code: string = (row.fault_code || '').toLowerCase();
                 if (code.startsWith('hvac')) {
                     const seq = parseInt(code.replace(/[^0-9]/g, '')) % 100;
+                    // 车厢级预警在选择特定机组时不显示
+                    if (carriageLevelSeqs.has(seq)) return false;
                     return unit === '机组一' ? u1Seqs.has(seq) : u2Seqs.has(seq);
                 }
                 // u1/u2 风格编码（alarm 类）
