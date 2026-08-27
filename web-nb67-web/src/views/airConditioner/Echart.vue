@@ -121,9 +121,11 @@ const buildChartOptions = (timeAxis, seriesList) => ({
                 const val = item.value !== null && item.value !== undefined
                     ? Number(item.value).toFixed(1)
                     : '-'
+                const series = seriesList[item.seriesIndex]
+                const unit = series?.unit || ''
                 res += `<div style="display:flex;justify-content:space-between;gap:20px">
                     <span>${item.marker} ${item.seriesName}</span>
-                    <span style="font-weight:bold">${val}</span>
+                    <span style="font-weight:bold">${val} ${unit}</span>
                 </div>`
             })
             return res
@@ -157,7 +159,7 @@ const buildChartOptions = (timeAxis, seriesList) => ({
 })
 
 const fetchData = async () => {
-    if (props.isOffline || !props.carriageId) return
+    if (!props.carriageId) return
     const params = selectedParams.value.length > 0 ? selectedParams.value : ['ras_u1', 'fas_u1', 'tic']
     const requestedTab = currentTab.value  // 捕获请求时的 tab，防止异步竞态
     try {
@@ -175,8 +177,10 @@ const fetchData = async () => {
         const timeAxis = list.map(i => formatBucket(i.bucket || i.time))
         const seriesList = params.map((key, idx) => {
             const paramDef = paramOptions.value.find(p => p.key === key)
+            const color = COLORS[idx % COLORS.length]
             return {
                 name: paramDef?.label || key,
+                unit: paramDef?.unit || '',
                 type: 'line',
                 smooth: true,
                 showSymbol: false,
@@ -184,7 +188,9 @@ const fetchData = async () => {
                     const v = i[key]
                     return v !== null && v !== undefined ? Number(v) : null
                 }),
-                lineStyle: { color: COLORS[idx % COLORS.length], width: 2 },
+                color,                          // 图例圆点颜色（优先级最高）
+                itemStyle: { color },           // 数据项颜色（兼容旧版 ECharts）
+                lineStyle: { color, width: 2 }, // 线条颜色
                 connectNulls: false,
             }
         })
@@ -195,20 +201,11 @@ const fetchData = async () => {
         })
     } catch (error) {
         console.error('Trend data error:', error)
-        hasData.value = false
+        // 请求失败（含离线）时保留上次数据与图表，等待下次轮询重试
     }
 }
 
 watch(() => props.carriageId, () => fetchData())
-
-watch(() => props.isOffline, (offline) => {
-    if (offline) {
-        hasData.value = false
-        if (myChart) myChart.clear()
-    } else {
-        fetchData()
-    }
-})
 
 import { MONITOR_CONFIG } from '@/config/monitorConfig.js'
 
