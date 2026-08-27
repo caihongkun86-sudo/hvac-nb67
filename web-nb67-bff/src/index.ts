@@ -392,6 +392,12 @@ async function bootstrap() {
                 }
             }
 
+            // 关键修复：判断是否是"全部机组"
+            const isAllUnits = !unitName;
+            // 全部机组时，每条原始记录展开成2条展示记录，
+            // 所以数据库查询的limit需要减半，才能保证返回的展示记录数 = 前端pageSize
+            const repoLimit = isAllUnits ? Math.ceil(limit / 2) : limit;
+
             const result = await StatusRepository.getRawHistory({
                 trainId,
                 carriageId,
@@ -399,7 +405,7 @@ async function bootstrap() {
                 startTime: String(startTime || ''),
                 endTime: String(endTime || ''),
                 page: parseInt(page as string),
-                limit: parseInt(limit as string)
+                limit: repoLimit  // ← 修复：全部机组时limit减半
             });
 
             // ms 转小时，保留 1 位小数
@@ -408,13 +414,10 @@ async function bootstrap() {
                     ? (Number(ms) / 3600000).toFixed(1) + 'h'
                     : '';
 
-            return {
-                code: 200,
-                data: {
-                    list: result.list.flatMap((row: any) => {
-                        const raw = row.payload_json?.raw || {};
+            // 展开后的数据
+            const expandedList = result.list.flatMap((row: any) => {
+                const raw = row.payload_json?.raw || {};
 
-                        // ── 机组一 (U1x) ─────────────────────────────────
                         const unit1 = {
                             train_id: row.train_id,
                             carriage_id: row.carriage_id,
@@ -522,13 +525,21 @@ async function bootstrap() {
                             line_id: row.line_id ?? '',
                         };
 
-                        const unitFilter = String(unitName || '');
-                        const units = [unit1, unit2];
-                        return unitFilter ? units.filter(u => u.unit_name === unitFilter) : units;
-                    }),
-                    // 如果按机组过滤则每条 DB 记录只出一行，总数不需要 ×2
-                    total: unitName ? result.total : result.total * 2
-                }
+                const unitFilter = String(unitName || '');
+                const units = [unit1, unit2];
+                return unitFilter ? units.filter(u => u.unit_name === unitFilter) : units;
+            });
+
+            // 安全截断：防止奇数条原始记录导致返回数据超过前端pageSize（如19条原始→38条展示，没问题；
+            // 但如果数据库返回了20条原始，展开40条，前端limit=39时就会多1条，这里做兜底截断）
+            const finalList = expandedList.slice(0, limit);
+            return {
+                code: 200,
+                data: {
+                    list: finalList,
+                    // 全部机组时总数翻倍，单选时保持原总数
+                    total: isAllUnits ? result.total * 2 : result.total
+                },
             };
         });
 
@@ -626,8 +637,11 @@ async function bootstrap() {
                     // 数字后缀型（HVAC编码）：奇数seq对应机组1，偶数对应机组2
                     if (c.startsWith('hvac')) {
                         const seq = parseInt(code.replace(/[^0-9]/g, '')) % 100;
-                        if ([1,3,5,7,10,12,13,16,17,21,22,25].includes(seq)) return '机组一';
-                        if ([2,4,6,8,11,14,15,18,19,23,24,26].includes(seq)) return '机组二';
+                        // 车厢级预警（不属于任何机组）
+                        const carriageLevelSeqs = new Set([7,8,9,20,76]);
+                        if (carriageLevelSeqs.has(seq)) return '-';
+                        if ([1,3,5,10,12,13,16,17,21,22,25].includes(seq)) return '机组一';
+                        if ([2,4,6,11,14,15,18,19,23,24,26].includes(seq)) return '机组二';
                     }
                     if (c.includes('u2')) return '机组二';
                     if (c.includes('u1')) return '机组一';
@@ -706,7 +720,21 @@ async function bootstrap() {
             });
 
             const CARRIAGE_MAP: Record<string, string> = { '1':'TC1','2':'MP1','3':'M1','4':'M2','5':'MP2','6':'TC2' };
-            const formatUnit = (code: string) => code?.toLowerCase().includes('u2') ? '机组二' : code?.toLowerCase().includes('u1') ? '机组一' : '-';
+            const formatUnit = (code: string) => {
+                if (!code) return '-';
+                const c = code.toLowerCase();
+                if (c.startsWith('hvac')) {
+                    const seq = parseInt(code.replace(/[^0-9]/g, '')) % 100;
+                    // 车厢级预警（不属于任何机组）
+                    const carriageLevelSeqs = new Set([7,8,9,20,76]);
+                    if (carriageLevelSeqs.has(seq)) return '';
+                    if ([1,3,5,10,12,13,16,17,21,22,25].includes(seq)) return '机组一';
+                    if ([2,4,6,11,14,15,18,19,23,24,26].includes(seq)) return '机组二';
+                }
+                if (c.includes('u2')) return '机组二';
+                if (c.includes('u1')) return '机组一';
+                return '-';
+            };
             const headers = ['列车号','车厢','机组','严重级别','预警名称','触发条件','开始时间','结束时间'];
             const rows = result.list.map((r: any) => {
                 return [
