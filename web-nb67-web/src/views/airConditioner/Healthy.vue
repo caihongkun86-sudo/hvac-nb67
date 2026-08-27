@@ -122,9 +122,11 @@ const getSuggestion = (status) => {
 }
 
 const fetchData = () => {
-    if (props.isOffline || !props.carriageId) return
+    if (!props.carriageId) return
     getHealthAssessment(props.carriageId).then(res => {
         assessmentData.value = res.data || res.vw_health_assessment || []
+    }).catch(() => {
+        // 请求失败（含离线）时保留上次数据，等待下次轮询重试
     })
 }
 
@@ -132,15 +134,6 @@ watch(() => props.carriageId, () => {
     assessmentData.value = []
     fetchData()
 })
-
-watch(() => props.isOffline, (offline) => {
-    if (offline) {
-        assessmentData.value = []
-    } else {
-        fetchData()
-    }
-})
-
 
 import { MONITOR_CONFIG } from '@/config/monitorConfig.js'
 
