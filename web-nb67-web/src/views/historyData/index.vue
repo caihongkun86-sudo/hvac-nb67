@@ -338,6 +338,7 @@ const handleDownload = async () => {
         const targetCarriages = carriageNos.length > 0 ? carriageNos : ['1', '2', '3', '4', '5', '6']
         
         let page = 1; let allRows = []
+        let serverTotal = 0
         
         while (true) {
             const res = await getTrainDataApi({
@@ -352,7 +353,13 @@ const handleDownload = async () => {
             const batch = res?.data?.list || []
             allRows = allRows.concat(batch)
             
-            if (allRows.length >= (res?.data?.total || 0) || batch.length < 500 || page >= 20) break
+            if (res?.data?.total) serverTotal = res.data.total
+
+            // 终止条件：已取完服务端总数 / 当前批不足 500 / 安全上限 2000 页（100 万条）
+            const done = (serverTotal > 0 && allRows.length >= serverTotal)
+                || batch.length < 500
+                || page >= 2000
+            if (done) break
             page++
         }
         
