@@ -89,10 +89,83 @@ export interface DimAlarmMaskTable {
 }
 
 /**
+ * alarm_lifecycle 表：告警生命周期（对齐 dist/init-db/09-migration-alarm-lifecycle.sql）
+ * 一条告警从开始到结束只有一行，end_time IS NULL 表示活跃中。
+ */
+export interface AlarmLifecycleTable {
+    id: Generated<string>;
+    device_id: string;
+    line_id: number | null;
+    train_id: number | null;
+    carriage_id: number | null;
+    unit_id: number | null;
+    fault_code: string;
+    fault_name: string | null;
+    severity: number | null;
+    start_time: Date;
+    end_time: Date | null;
+    last_seen_time: Date;
+    trigger_snapshot: any | null;
+    source: string | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+}
+
+/**
+ * warning_lifecycle 表：预警生命周期（对齐 dist/init-db/08-migration-20260603.sql）
+ * 一条预警从开始到结束只有一行，end_time IS NULL 表示活跃中。
+ */
+export interface WarningLifecycleTable {
+    id: Generated<string>;
+    device_id: string;
+    line_id: number | null;
+    train_id: number | null;
+    carriage_id: number | null;
+    unit_id: number | null;
+    fault_code: string;
+    fault_name: string | null;
+    warn_code: string | null;
+    severity: number | null;
+    start_time: Date;
+    end_time: Date | null;
+    last_seen_time: Date;
+    trigger_snapshot: any | null;
+    source: string | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+}
+
+/**
+ * warning_config 表：预警条件配置（对齐 dist/init-db/02-migration-20260504.sql）
+ */
+export interface WarningConfigTable {
+    id: Generated<number>;
+    warn_code: string;
+    component_name: string;
+    category: string | null;
+    threshold_good: string | null;
+    threshold_normal: string | null;
+    threshold_bad: string | null;
+    trigger_operator: string;
+    trigger_value: number;
+    clear_value: number | null;
+    duration_seconds: number;
+    unit: string | null;
+    strategy: string | null;
+    params: any | null;
+    enabled: boolean;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+}
+
+/**
  * 数据库 Schema 统一入口
  */
 export interface Database {
     'hvac.fact_raw': FactRawTable;
     'hvac.fact_event': FactEventTable;
     'hvac.dim_alarm_mask': DimAlarmMaskTable;
+    'hvac.alarm_lifecycle': AlarmLifecycleTable;
+    'hvac.warning_lifecycle': WarningLifecycleTable;
+    'hvac.warning_config': WarningConfigTable;
 }

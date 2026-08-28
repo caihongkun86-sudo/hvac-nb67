@@ -30,6 +30,15 @@ type Config struct {
 
 	// WarnSweepIntervalSec SweepTimeouts 执行间隔（秒）。默认 30s。
 	WarnSweepIntervalSec int
+
+	// AlarmSweepTimeoutSec 告警超时消除阈值（秒）。
+	// alarm_lifecycle 中 end_time IS NULL 且 last_seen_time 距今超过此值的活跃行
+	// 由 AlarmLifecycleWriter.SweepTimeouts 兜底关闭（DB close + 内存 active 同步清理）。
+	// 0 = 禁用。默认 300s（约定：连续 300s 未刷新视为设备断流，告警消除）。
+	AlarmSweepTimeoutSec int
+
+	// AlarmSweepIntervalSec alarm SweepTimeouts 执行间隔（秒）。默认 300s。
+	AlarmSweepIntervalSec int
 }
 
 func loadConfig() Config {
@@ -46,6 +55,9 @@ func loadConfig() Config {
 
 		WarnSweepTimeoutSec:  getEnvInt("WARN_SWEEP_TIMEOUT_SEC", 43200),
 		WarnSweepIntervalSec: getEnvInt("WARN_SWEEP_INTERVAL_SEC", 300),
+
+		AlarmSweepTimeoutSec:  getEnvInt("ALARM_SWEEP_TIMEOUT_SEC", 300),
+		AlarmSweepIntervalSec: getEnvInt("ALARM_SWEEP_INTERVAL_SEC", 300),
 	}
 }
 

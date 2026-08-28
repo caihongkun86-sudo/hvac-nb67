@@ -13,9 +13,10 @@ import (
 )
 
 type adapter struct {
-	cfg       Config
-	pool      *pgxpool.Pool
-	lifecycle *LifecycleWriter
+	cfg            Config
+	pool           *pgxpool.Pool
+	lifecycle      *LifecycleWriter
+	alarmLifecycle *AlarmLifecycleWriter
 }
 
 type saramaMessage struct {
@@ -110,11 +111,12 @@ func (h *consumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error { retu
 func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	batch := make([]pendingMessage, 0, h.adapter.cfg.BatchSize)
 	predictFrames := make([]PredictFrame, 0, h.adapter.cfg.BatchSize)
+	alarmFrames := make([]AlarmFrame, 0, h.adapter.cfg.BatchSize)
 	ticker := time.NewTicker(h.adapter.cfg.FlushInterval)
 	defer ticker.Stop()
 
 	flush := func() {
-		if len(batch) == 0 && len(predictFrames) == 0 {
+		if len(batch) == 0 && len(predictFrames) == 0 && len(alarmFrames) == 0 {
 			return
 		}
 		if len(batch) > 0 {
@@ -131,11 +133,20 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 			}
 			lcCancel()
 		}
+		// 状态机：alarm frames（含空帧）推送给 alarm lifecycle writer（双轨：同时已写 fact_event）
+		if len(alarmFrames) > 0 && h.adapter.alarmLifecycle != nil {
+			lcCtx, lcCancel := context.WithTimeout(sess.Context(), 10*time.Second)
+			if err := h.adapter.alarmLifecycle.ProcessFrames(lcCtx, alarmFrames); err != nil {
+				log.Printf("[WARN] alarm lifecycle write failed (continuing): %v", err)
+			}
+			lcCancel()
+		}
 		for _, item := range batch {
 			sess.MarkMessage(item.msg.inner, "")
 		}
 		batch = batch[:0]
 		predictFrames = predictFrames[:0]
+		alarmFrames = alarmFrames[:0]
 	}
 
 	for {
@@ -230,6 +241,30 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 						})
 					}
 					predictFrames = append(predictFrames, frame)
+				}
+				// alarm 帧走 alarm lifecycle writer（双轨：同时已写入 flats → fact_event）
+				if eventType == "alarm" && topMeta.DeviceID != "" {
+					alarmFrame := AlarmFrame{
+						DeviceID:      topMeta.DeviceID,
+						LineID:        topMeta.LineIDInt32(),
+						TrainID:       topMeta.TrainIDInt32(),
+						CarriageID:    topMeta.CarriageIDInt32(),
+						EventTimeText: topMeta.EventTimeText,
+					}
+					for _, hit := range ev.Hits {
+						sev := hit.Severity
+						if hit.Level != nil {
+							sev = *hit.Level
+						}
+						payload, _ := json.Marshal(hit)
+						alarmFrame.Hits = append(alarmFrame.Hits, AlarmHitMeta{
+							FaultCode: hit.Code,
+							FaultName: hit.Name,
+							Severity:  sev,
+							Payload:   payload,
+						})
+					}
+					alarmFrames = append(alarmFrames, alarmFrame)
 				}
 				batch = append(batch, pendingMessage{isEvent: true, record: flats, msg: saramaMessage{inner: msg}})
 			} else {

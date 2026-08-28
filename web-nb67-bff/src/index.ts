@@ -302,7 +302,7 @@ async function bootstrap() {
                         fault_code: row.fault_code,
                         fault_desc: row.fault_name,
                         fault_level: level,
-                        occurrence_time: formatTime(row[config.runtime === 'DEV' ? 'ingest_time' : 'event_time']),
+                        occurrence_time: formatTime(row['event_time']),
                         recovery_time: row.recovery_time ? formatTime(row.recovery_time) : null,
                         status: row.recovery_time ? '已恢复' : '活动'
                     };
@@ -313,8 +313,8 @@ async function bootstrap() {
                     carriage_no: row.carriage_id,
                     fault_code: row.fault_code,
                     name: row.fault_name,
-                    start_time: formatTime(row[config.runtime === 'DEV' ? 'ingest_time' : 'event_time']),
-                    end_time: null,
+                    start_time: formatTime(row['event_time']),
+                    end_time: row.recovery_time ? formatTime(row.recovery_time) : null,
                     state: `${row.train_id}${String(row.carriage_id).padStart(2, '0')}1`
                 }));
 

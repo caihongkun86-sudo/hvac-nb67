@@ -115,18 +115,14 @@ export class StatusRepository {
      */
     static async getTrainDetails(trainIds: number[]) {
         let query = db
-            .selectFrom('hvac.fact_event')
+            .selectFrom('hvac.alarm_lifecycle')
             .selectAll()
-            // 实时故障去重：同一车厢同一编码只保留最新触发的一条（降序取第一条）
-            .distinctOn(['train_id', 'carriage_id' as any, 'fault_code'])
-            .where('event_type', '=', 'alarm')
-            .where('recovery_time', 'is', null)
-            .where(this.timeCol as any, '>', sql`now() - interval '24 hours'`)
+            // alarm_lifecycle 已是一行一条告警生命周期，无需 distinctOn 去重
+            .where('end_time', 'is', null)
             .orderBy('train_id')
-            .orderBy('carriage_id' as any)
+            .orderBy('carriage_id')
             .orderBy('fault_code')
-            .orderBy(this.timeCol as any, 'desc')
-            .limit(200);
+            .orderBy('start_time', 'desc');
 
         if (trainIds && trainIds.length > 0 && !isNaN(Number(trainIds[0]))) {
             const validIds = trainIds.filter(id => id !== undefined && id !== null) as number[];
@@ -140,7 +136,7 @@ export class StatusRepository {
         return data.map(row => ({
             [row.fault_code as string]: 1,
             [`${row.fault_code}_name`]: row.fault_name,
-            alarm_time: formatTime((row as any)[this.timeCol]),
+            alarm_time: formatTime(row.start_time),
             carriage_no: row.carriage_id || 0,
             line_no: row.line_id || 0,
             train_no: row.train_id || 0
@@ -260,7 +256,7 @@ export class StatusRepository {
                 sql<number>`COUNT(*)`.as('warning_count')
             ])
             .where('train_id', '=', trainId)
-            .where('start_time', '>', sql`now() - interval '24 hours'`)
+            .where('start_time', '>', sql`now() - interval '24 hours'` as any)
             .where('end_time', 'is', null)
             .groupBy('carriage_id')
             .execute();
@@ -516,80 +512,74 @@ export class StatusRepository {
             return q;
         };
 
-        // alarm 路径：fact_event 每帧入一行 → 历史报警页天然重复。
-        // 这里在 JS 层按 (train_id, carriage_id, fault_code) + 60s "发作岛" 去重，
-        // 同一岛取 min(event_time/ingest_time) 作触发时刻，max(timeCol) 作 recovery_time。
-        // 不动 DB schema，不影响 predict 路径（predict 走 warning_lifecycle）。
-        if (params.eventType === 'alarm') {
-            const rawAll = await buildBase()
-                .selectAll()
-                .orderBy(this.timeCol as any, 'desc')
-                .orderBy('event_time', 'desc')
-                .orderBy('fault_code', 'asc')
-                .limit(50000)
-                .execute();
-
-            const GAP_MS = 300_000;
-            const tCol = this.timeCol;
-            // 按 key + 时间正序构造发作岛
-            const asc = [...rawAll].sort((a: any, b: any) => {
-                const ka = `${a.train_id}:${a.carriage_id}:${a.fault_code}`;
-                const kb = `${b.train_id}:${b.carriage_id}:${b.fault_code}`;
-                if (ka !== kb) return ka.localeCompare(kb);
-                return new Date(a[tCol]).getTime() - new Date(b[tCol]).getTime();
-            });
-            type Island = {
-                key: string;
-                row: any;          // 第一帧（带完整字段）
-                start: Date;
-                lastSeen: Date;
-            };
-            const islands: Island[] = [];
-            let cur: Island | null = null;
-            for (const r of asc) {
-                const k = `${(r as any).train_id}:${(r as any).carriage_id}:${(r as any).fault_code}`;
-                const t = new Date((r as any)[tCol]).getTime();
-                if (cur && cur.key === k && t - cur.lastSeen.getTime() <= GAP_MS) {
-                    cur.lastSeen = new Date(t);
-                } else {
-                    cur = { key: k, row: r, start: new Date(t), lastSeen: new Date(t) };
-                    islands.push(cur);
+        // buildAlarmBase：查 alarm_lifecycle（storage-adapter 已做状态机 diff 去重的生命周期表）。
+        // 与 buildBase 差异：① 表不同（alarm_lifecycle vs fact_event）② 时间过滤用 start_time
+        // ③ unitNames 用 unit_id 字段（替代 fault_code 正则，alarm_lifecycle 已写入 unit_id）。
+        // 返回 any 以绕过 Kysely 别名表达式的类型推断（与项目既有 as any 风格一致）。
+        const buildAlarmBase = (): any => {
+            let q = db.selectFrom('hvac.alarm_lifecycle');
+            if (params.startTime) {
+                const start = new Date(params.startTime);
+                if (!isNaN(start.getTime())) {
+                    q = q.where('start_time', '>=', start);
                 }
             }
-            // 每岛 = 一条 "alarm" 记录：start 用 islandStart；recovery_time 推断：
-            //   - 原 row.recovery_time 不为 null → 直接用
-            //   - 同 key 后面还有更新的岛（说明此岛已结束） → recovery_time = lastSeen
-            //   - 是该 key 最新一岛 且 lastSeen 距 now < 60s → 视为仍活跃，recovery_time = null
-            //   - 是该 key 最新一岛 但 lastSeen 已经超过 60s → 视为已结束，recovery_time = lastSeen
-            const nowMs = Date.now();
-            const lastIslandIdxByKey = new Map<string, number>();
-            islands.forEach((isl, idx) => lastIslandIdxByKey.set(isl.key, idx));
-            const merged = islands.map((i, idx) => {
-                let recovery: Date | null;
-                if (i.row.recovery_time != null) {
-                    recovery = i.row.recovery_time;
-                } else if (lastIslandIdxByKey.get(i.key) !== idx) {
-                    recovery = i.lastSeen;        // 此岛后面还有同 key 新岛，必定已结束
-                } else if (nowMs - i.lastSeen.getTime() > 300_000) {
-                    recovery = i.lastSeen;        // 最新岛但已超 60s 无新帧 → 视为结束
-                } else {
-                    recovery = null;              // 仍活跃
+            if (params.endTime) {
+                const end = new Date(params.endTime);
+                if (!isNaN(end.getTime())) {
+                    q = q.where('start_time', '<=', end);
                 }
-                return {
-                    ...i.row,
-                    [tCol]: i.start,
-                    event_time: i.start,
-                    ingest_time: i.start,
-                    recovery_time: recovery,
-                    occurrence_start: i.start,
-                };
-            });
-            // 按 start_time desc 重排，分页
-            merged.sort((a: any, b: any) =>
-                new Date(b.event_time).getTime() - new Date(a.event_time).getTime());
-            const total = merged.length;
-            const list = merged.slice(offset, offset + limit);
-            console.log(`[Repository] Query Alarms (deduped): total=${total}, returned=${list.length}, page=${page}, offset=${offset}, range=[${params.startTime} - ${params.endTime}]`);
+            }
+            if (params.trainId) {
+                q = q.where('train_id', '=', params.trainId);
+            }
+            if (params.carriageId) {
+                q = q.where('carriage_id', '=', params.carriageId);
+            }
+            if (params.carriageIds && params.carriageIds.length > 0) {
+                q = q.where('carriage_id', 'in', params.carriageIds as any);
+            }
+            // alarm_lifecycle.unit_id 由 storage-adapter inferAlarmUnitID 写入：
+            // seq 27-46→1（机组一），47-66→2（机组二），67-75→null（公共告警）
+            if (params.unitNames && params.unitNames.length > 0 && params.unitNames.length < 2) {
+                if (params.unitNames.includes('机组一')) {
+                    q = q.where('unit_id', '=', 1);
+                } else if (params.unitNames.includes('机组二')) {
+                    q = q.where('unit_id', '=', 2);
+                }
+            }
+            return q;
+        };
+
+        // alarm 路径：直接查 alarm_lifecycle（已是去重后的生命周期行），DB 层 count + 分页。
+        // 字段映射保持 fact_event 老 API 契约（event_time/ingest_time/recovery_time/status 等），
+        // 前端无感知。活跃判断：end_time IS NULL（清扫器 300s 兜底填 end_time）。
+        if (params.eventType === 'alarm') {
+            const totalResult = await buildAlarmBase()
+                .select(sql<number>`count(*)`.as('count'))
+                .executeTakeFirst();
+            const total = Number((totalResult as any)?.count || 0);
+
+            const list = await buildAlarmBase()
+                .select([
+                    'device_id', 'line_id', 'train_id', 'carriage_id', 'unit_id',
+                    'fault_code', 'fault_name', 'severity',
+                    'start_time', 'end_time', 'last_seen_time', 'source', 'created_at',
+                ])
+                .select(sql`start_time`.as('event_time'))
+                .select(sql`created_at`.as('ingest_time'))
+                .select(sql`end_time`.as('recovery_time'))
+                .select(sql`'alarm'::text`.as('event_type'))
+                .select(sql`CASE WHEN end_time IS NULL THEN 'open' ELSE 'resolved' END`.as('status'))
+                .select(sql`start_time`.as('occurrence_start'))
+                .select(sql`trigger_snapshot`.as('payload_json'))
+                .orderBy('start_time', 'desc')
+                .orderBy('fault_code', 'asc')
+                .limit(limit)
+                .offset(offset)
+                .execute();
+
+            console.log(`[Repository] Query Alarms (alarm_lifecycle): total=${total}, returned=${list.length}, page=${page}, offset=${offset}, range=[${params.startTime} - ${params.endTime}]`);
             return { list, total };
         }
 
