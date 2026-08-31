@@ -601,7 +601,7 @@ async function bootstrap() {
                     formatUnit(r.fault_code),
                     level,
                     r.fault_name || '',
-                    formatTime(r[config.runtime === 'DEV' ? 'ingest_time' : 'event_time']),
+                    r.event_time ? formatTime(r.event_time) : '',
                     r.recovery_time ? formatTime(r.recovery_time) : '',
                     r.recovery_time ? '已恢复' : '活动'
                 ].map((v: any) => `"${String(v).replace(/"/g, '""')}"`).join(',');
@@ -655,8 +655,8 @@ async function bootstrap() {
                     '4':'制冷模式吸气压力<2.0bar持续5分钟，或通风模式高压<5bar持续15分钟',
                     '5':'同机组压缩机电流差>2A持续3分钟，或过热度>20℃/<-8℃持续10分钟',
                     '6':'同机组压缩机电流差>2A持续3分钟，或过热度>20℃/<-8℃持续10分钟',
-                    '7':'两机组新风温度差值>8℃持续5分钟',
-                    '8':'两机组回风温度差值>8℃持续5分钟',
+                    '7':'两机组新风温度差值>8℃持续8分钟',
+                    '8':'两机组回风温度差值>8℃持续8分钟',
                     '9':'制冷运行>20分钟且无故障，回风温度>目标温度+4℃持续2分钟',
                     '10':'通风机运行中滤网压差>300pa持续30分钟',
                     '11':'通风机运行中滤网压差>300pa持续30分钟',
@@ -675,6 +675,7 @@ async function bootstrap() {
                     '24':'新风温度<35℃且压缩机电流>18A持续10分钟',
                     '25':'通风机运行>20分钟，CO₂>4500ppm持续15分钟或PM/TVOC超标持续20分钟',
                     '26':'通风机运行>20分钟，CO₂>4500ppm持续15分钟或PM/TVOC超标持续20分钟',
+                    '76':'两机组车厢温度差值>8℃持续8分钟',
                 };
                 const getTriggerCondition = (row: any): string => {
                     if (row.trigger_condition) return row.trigger_condition;
