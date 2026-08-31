@@ -184,7 +184,9 @@ export class HistoryRepository {
     /**
      * B5: 预警发生时间前后各1小时参数曲线
      *
-     * 2小时窗口固定使用原始表（需要60秒精度）
+     * 2小时窗口，bucket=60s。
+     * 优先从物化视图 fact_raw_1min 查询（已预聚合，避免实时 JSONB 提取），
+     * 失败时降级到原始表 fact_raw 实时聚合。
      */
     static async getPredictDetailCurve(
         trainId: number,
@@ -238,29 +240,49 @@ export class HistoryRepository {
         const validParams = params.filter(p => TREND_PARAM_DEFS[p]);
 
         const bucketSize = '60 seconds';
-        const selects: any[] = [
-            sql.raw(`time_bucket('${bucketSize}', ${this.timeCol})`).as('bucket'),
-        ];
 
-        for (const key of validParams) {
-            const def = TREND_PARAM_DEFS[key]!;
-            const colExpr = def.col.includes("->")
-                ? `(${def.col})::numeric`
-                : `${def.col}::numeric`;
-            selects.push(sql.raw(`ROUND(AVG(${colExpr}) / ${def.scale}, 1)`).as(key));
+        const buildQuery = (tableName: string, isView: boolean) => {
+            const selects: any[] = [
+                sql.raw(`time_bucket('${bucketSize}', ${isView ? 'bucket' : 'event_time'})`).as('bucket'),
+            ];
+
+            for (const key of validParams) {
+                const def = TREND_PARAM_DEFS[key]!;
+                if (isView) {
+                    selects.push(sql.raw(`ROUND(AVG(${def.viewCol}), 1)`).as(key));
+                } else {
+                    const colExpr = def.col.includes("->")
+                        ? `(${def.col})::numeric`
+                        : `${def.col}::numeric`;
+                    selects.push(sql.raw(`ROUND(AVG(${colExpr}) / ${def.scale}, 1)`).as(key));
+                }
+            }
+
+            const timeFilterCol = isView ? 'bucket' : 'event_time';
+            return db
+                .selectFrom(tableName as any)
+                .select(selects)
+                .where('train_id', '=', trainId)
+                .where('carriage_id', '=', carriageId)
+                .where(sql.raw(timeFilterCol), '>=', startTime)
+                .where(sql.raw(timeFilterCol), '<=', endTime)
+                .groupBy('bucket')
+                .orderBy('bucket', 'asc');
+        };
+
+        // 优先使用物化视图，失败或返回空时降级到原始表
+        let rows: any[];
+        try {
+            const query = buildQuery('hvac.fact_raw_1min' as any, true);
+            rows = await this.executeWithTimeout(query.execute(), QUERY_TIMEOUT_MS);
+            if (rows.length === 0) {
+                throw new Error('empty result (not yet refreshed for this time range)');
+            }
+        } catch (err: any) {
+            console.warn(`[HistoryRepository] fact_raw_1min 物化视图查询失败，降级到原始表: ${err.message}`);
+            const fallbackQuery = buildQuery('hvac.fact_raw', false);
+            rows = await this.executeWithTimeout(fallbackQuery.execute(), QUERY_TIMEOUT_MS);
         }
-
-        const query = db
-            .selectFrom('hvac.fact_raw')
-            .select(selects)
-            .where('train_id', '=', trainId)
-            .where('carriage_id', '=', carriageId)
-            .where(this.timeCol as any, '>=', startTime)
-            .where(this.timeCol as any, '<=', endTime)
-            .groupBy('bucket')
-            .orderBy('bucket', 'asc');
-
-        const rows = await this.executeWithTimeout(query.execute(), QUERY_TIMEOUT_MS);
 
         return {
             params: validParams.map(k => ({ key: k, ...TREND_PARAM_DEFS[k] })),

@@ -848,8 +848,8 @@ export class StatusRepository {
 
         const filteredTotal = list.length;
 
-        // 计算每行的"发作起始时间"：同一故障连续触发共享同一 start_time，60s 无触发视为新的发作序列
-        const GAP_MS = 60_000;
+        // 计算每行的"发作起始时间"：同一故障连续触发共享同一 start_time，300s 无触发视为新的发作序列
+        const GAP_MS = 300_000;
         const tCol = this.timeCol;
         const asc = [...list].sort((a: any, b: any) => {
             const ka = `${a.train_id}:${a.carriage_id}:${a.fault_code}`;
