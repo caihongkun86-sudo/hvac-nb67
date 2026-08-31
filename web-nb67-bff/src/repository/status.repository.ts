@@ -654,23 +654,20 @@ export class StatusRepository {
      * 获取故障统计供 Echart 渲染 (返回 vw_alarm_info_all_date)
      */
     static async getFaultStatistics() {
-        // 2026-06-09 修复：fact_event 每帧入一行，原查询取 last 5000 行让 Echart 拿到
-        // 大量重复（一条 30s 报警 = 30 行）→ 占比统计严重失真。
-        // 这里按 (fault_code, device_id, minute) 去重——同分钟内同设备同故障算 1 次——
-        // 既保留前端 "value === 1" 累加契约（每个数组项形如 {HVAC301:1}），
-        // 又把"同一报警重复出现 30 次"的伪信号过滤掉。
+        // 2026-08-28 切换：alarm_lifecycle 一行 = 一次发作（300s 发作岛去重），
+        // 天然替代原 fact_event 的 (fault_code, device_id, minute) 去重逻辑。
+        // 前端契约不变："value === 1" 累加，每个数组项形如 {HVAC301:1}。
         const rows = await db
-            .selectFrom('hvac.fact_event')
+            .selectFrom('hvac.alarm_lifecycle')
             .select([
                 'fault_code',
-                sql<Date>`date_trunc('minute', ${sql.ref(this.timeCol)})`.as('minute'),
-                'device_id' as any,
+                sql<Date>`date_trunc('minute', start_time)`.as('minute'),
+                'device_id',
             ])
-            .where('event_type', '=', 'alarm')
-            .where(this.timeCol as any, '>=', sql<Date>`now() - interval '7 days'` as any)
-            .groupBy(['fault_code', 'device_id' as any, sql`date_trunc('minute', ${sql.ref(this.timeCol)})`])
-            .orderBy(sql`date_trunc('minute', ${sql.ref(this.timeCol)})`, 'desc')
-            .limit(5000)
+            .where('start_time', '>=', sql<Date>`now() - interval '7 days'` as any)
+            .groupBy(['fault_code', 'device_id', sql`date_trunc('minute', start_time)`])
+            .orderBy(sql`date_trunc('minute', start_time)`, 'desc')
+            .limit(50000)
             .execute();
 
         return {

@@ -187,35 +187,40 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 				// 顶层 event_meta（适配 nb67 输出格式）；旧消息若 EventMeta 在 hit 里也兼容
 				topMeta := ev.EventMeta
 
+				// 双轨下线（2026-08-28）：alarm 已切换到 hvac.alarm_lifecycle 单一事实表，
+				// 停止向 fact_event 写 alarm 行；predict/life 仍写 fact_event。
+				// alarm 消息仍进入 batch（保证 offset 正常提交），flats 保持为空。
 				flats := make([]EventFlatRecord, 0, len(ev.Hits))
-				for _, hit := range ev.Hits {
-					sev := hit.Severity
-					if hit.Level != nil {
-						sev = *hit.Level
+				if eventType != "alarm" {
+					for _, hit := range ev.Hits {
+						sev := hit.Severity
+						if hit.Level != nil {
+							sev = *hit.Level
+						}
+
+						// hit.EventMeta 在旧 schema 中携带元数据；新 schema 走顶层
+						meta := hit.EventMeta
+						if meta.DeviceID == "" {
+							meta = topMeta
+						}
+
+						// 为了方便以后分析，payload_json 包含原始 hit 信息
+						payload, _ := json.Marshal(hit)
+
+						flats = append(flats, EventFlatRecord{
+							EventTime:  meta.EventTimeText,
+							IngestTime: time.Now().Format(time.RFC3339),
+							LineID:     meta.LineIDInt32(),
+							TrainID:    meta.TrainIDInt32(),
+							CarriageID: meta.CarriageIDInt32(),
+							DeviceID:   meta.DeviceID,
+							EventType:  eventType,
+							FaultCode:  hit.Code,
+							FaultName:  hit.Name,
+							Severity:   sev,
+							Payload:    payload,
+						})
 					}
-
-					// hit.EventMeta 在旧 schema 中携带元数据；新 schema 走顶层
-					meta := hit.EventMeta
-					if meta.DeviceID == "" {
-						meta = topMeta
-					}
-
-					// 为了方便以后分析，payload_json 包含原始 hit 信息
-					payload, _ := json.Marshal(hit)
-
-					flats = append(flats, EventFlatRecord{
-						EventTime:  meta.EventTimeText,
-						IngestTime: time.Now().Format(time.RFC3339),
-						LineID:     meta.LineIDInt32(),
-						TrainID:    meta.TrainIDInt32(),
-						CarriageID: meta.CarriageIDInt32(),
-						DeviceID:   meta.DeviceID,
-						EventType:  eventType,
-						FaultCode:  hit.Code,
-						FaultName:  hit.Name,
-						Severity:   sev,
-						Payload:    payload,
-					})
 				}
 
 				// predict 帧（含空帧）走状态机；EventMeta 来自顶层
@@ -242,7 +247,7 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 					}
 					predictFrames = append(predictFrames, frame)
 				}
-				// alarm 帧走 alarm lifecycle writer（双轨：同时已写入 flats → fact_event）
+				// alarm 帧走 alarm lifecycle writer（fact_event 不再写 alarm 行）
 				if eventType == "alarm" && topMeta.DeviceID != "" {
 					alarmFrame := AlarmFrame{
 						DeviceID:      topMeta.DeviceID,
