@@ -96,7 +96,12 @@ const VIEW_MAP: Record<string, { view: string; bucketSize: string; lookback: str
 };
 
 // 查询超时配置（毫秒）
-const QUERY_TIMEOUT_MS = 10000;
+const QUERY_TIMEOUT_MS = 30000;
+
+// fact_raw_1min 物化视图可用性缓存：
+// 42P01（视图不存在）时缓存 60s，期间直接走原始表，避免每次请求都白打一条必失败的查询
+let factRaw1minState: { available: boolean; checkedAt: number } | null = null;
+const VIEW_CHECK_TTL_MS = 60_000;
 
 export class HistoryRepository {
     private static get timeCol() {
@@ -272,14 +277,28 @@ export class HistoryRepository {
 
         // 优先使用物化视图，失败或返回空时降级到原始表
         let rows: any[];
-        try {
-            const query = buildQuery('hvac.fact_raw_1min' as any, true);
-            rows = await this.executeWithTimeout(query.execute(), QUERY_TIMEOUT_MS);
-            if (rows.length === 0) {
-                throw new Error('empty result (not yet refreshed for this time range)');
+        const viewUsable =
+            !factRaw1minState ||
+            factRaw1minState.available ||
+            Date.now() - factRaw1minState.checkedAt > VIEW_CHECK_TTL_MS;
+
+        if (viewUsable) {
+            try {
+                const query = buildQuery('hvac.fact_raw_1min' as any, true);
+                rows = await this.executeWithTimeout(query.execute(), QUERY_TIMEOUT_MS);
+                if (rows.length === 0) {
+                    throw new Error('empty result (not yet refreshed for this time range)');
+                }
+                factRaw1minState = { available: true, checkedAt: Date.now() };
+            } catch (err: any) {
+                if (err?.code === '42P01') {
+                    factRaw1minState = { available: false, checkedAt: Date.now() };
+                }
+                console.warn(`[HistoryRepository] fact_raw_1min 物化视图查询失败，降级到原始表: ${err.message}`);
+                const fallbackQuery = buildQuery('hvac.fact_raw', false);
+                rows = await this.executeWithTimeout(fallbackQuery.execute(), QUERY_TIMEOUT_MS);
             }
-        } catch (err: any) {
-            console.warn(`[HistoryRepository] fact_raw_1min 物化视图查询失败，降级到原始表: ${err.message}`);
+        } else {
             const fallbackQuery = buildQuery('hvac.fact_raw', false);
             rows = await this.executeWithTimeout(fallbackQuery.execute(), QUERY_TIMEOUT_MS);
         }

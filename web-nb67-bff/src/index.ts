@@ -426,6 +426,7 @@ async function bootstrap() {
                             unit_name: '机组一',
 
                             i_inner_temp: raw.Tveh1 !== undefined ? (Number(raw.Tveh1) / 10).toFixed(1) : '',
+                            i_back_temp: raw.RasU1 !== undefined ? (Number(raw.RasU1) / 10).toFixed(1) : '',
                             i_outer_temp: raw.FasU1 !== undefined ? (Number(raw.FasU1) / 10).toFixed(1) : '',
                             i_set_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
                             i_hum: raw.AqHU1 !== undefined ? (Number(raw.AqHU1) / 10).toFixed(1) : '',
@@ -454,6 +455,10 @@ async function bootstrap() {
 
                             i_sat1: raw.SasU11 !== undefined ? (Number(raw.SasU11) / 10).toFixed(1) : '',
                             i_sat2: raw.SasU12 !== undefined ? (Number(raw.SasU12) / 10).toFixed(1) : '',
+                            i_suckt1: raw.SucktU11 !== undefined ? (Number(raw.SucktU11) / 10).toFixed(1) : '',
+                            i_suckt2: raw.SucktU12 !== undefined ? (Number(raw.SucktU12) / 10).toFixed(1) : '',
+                            i_pres_diff: raw.PresdiffU1 !== undefined ? (Number(raw.PresdiffU1) / 10).toFixed(1) : '',
+                            i_exufan: raw.IExufan !== undefined ? (Number(raw.IExufan) / 10).toFixed(1) : '',
 
                             dwcf_op_tm1: raw.DwcfOpTmU11 ?? '',
                             dwcf_op_tm2: raw.DwcfOpTmU12 ?? '',
@@ -480,6 +485,7 @@ async function bootstrap() {
                             unit_name: '机组二',
 
                             i_inner_temp: raw.Tveh2 !== undefined ? (Number(raw.Tveh2) / 10).toFixed(1) : '',
+                            i_back_temp: raw.RasU2 !== undefined ? (Number(raw.RasU2) / 10).toFixed(1) : '',
                             i_outer_temp: raw.FasU2 !== undefined ? (Number(raw.FasU2) / 10).toFixed(1) : '',
                             i_set_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
                             i_sp_u1: raw.SpU21 !== undefined ? (Number(raw.SpU21) / 10).toFixed(1) : '',
@@ -508,6 +514,10 @@ async function bootstrap() {
 
                             i_sat1: raw.SasU21 !== undefined ? (Number(raw.SasU21) / 10).toFixed(1) : '',
                             i_sat2: raw.SasU22 !== undefined ? (Number(raw.SasU22) / 10).toFixed(1) : '',
+                            i_suckt1: raw.SucktU21 !== undefined ? (Number(raw.SucktU21) / 10).toFixed(1) : '',
+                            i_suckt2: raw.SucktU22 !== undefined ? (Number(raw.SucktU22) / 10).toFixed(1) : '',
+                            i_pres_diff: raw.PresdiffU2 !== undefined ? (Number(raw.PresdiffU2) / 10).toFixed(1) : '',
+                            i_exufan: raw.IExufan !== undefined ? (Number(raw.IExufan) / 10).toFixed(1) : '',
 
                             dwcf_op_tm1: raw.DwcfOpTmU21 ?? '',
                             dwcf_op_tm2: raw.DwcfOpTmU22 ?? '',

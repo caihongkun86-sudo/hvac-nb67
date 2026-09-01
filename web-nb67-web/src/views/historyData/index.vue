@@ -77,7 +77,8 @@
                         <template #default="s">{{ CARRIAGE_MAP[String(s.row.carriage_id)] || s.row.carriage_id }}</template>
                     </el-table-column>
                     <el-table-column prop="unit_name"       label="机组"               width="90"  fixed="left" show-overflow-tooltip />
-                    <el-table-column prop="i_inner_temp"    label="室内温度(℃)"        width="120" show-overflow-tooltip />
+                    <el-table-column prop="i_inner_temp"    label="车厢温度(℃)"        width="120" show-overflow-tooltip />
+                    <el-table-column prop="i_back_temp"     label="回风温度(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_outer_temp"    label="新风温度(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_set_temp"      label="设定温度(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_hum"           label="湿度(%)"            width="90"  show-overflow-tooltip />
@@ -97,12 +98,16 @@
                     <el-table-column prop="i_low_pres1"     label="低压1(bar)"          width="110" show-overflow-tooltip />
                     <el-table-column prop="i_high_pres2"    label="高压2(bar)"          width="110" show-overflow-tooltip />
                     <el-table-column prop="i_low_pres2"     label="低压2(bar)"          width="110" show-overflow-tooltip />
+                    <el-table-column prop="i_pres_diff"     label="压力差(bar)"         width="110" show-overflow-tooltip />
+                    <el-table-column prop="i_suckt1"        label="吸风温度1(℃)"        width="120" show-overflow-tooltip />
+                    <el-table-column prop="i_suckt2"        label="吸风温度2(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_sat1"          label="送风温度1(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="i_sat2"          label="送风温度2(℃)"        width="120" show-overflow-tooltip />
                     <el-table-column prop="dwcf_op_tm1"     label="冷凝运行时间(秒)"   width="150" show-overflow-tooltip />
                     <el-table-column prop="dwcp_op_tm1"     label="压缩机时间1(秒)"     width="135" show-overflow-tooltip />
                     <el-table-column prop="dwcp_op_tm2"     label="压缩机时间2(秒)"     width="135" show-overflow-tooltip />
                     <el-table-column prop="dwexufan_op_tm"  label="废排风机时间(秒)"    width="135" show-overflow-tooltip />
+                    <el-table-column prop="i_exufan"        label="废排风机电流(A)"    width="135" show-overflow-tooltip />
                     <el-table-column prop="dwfad_op_cnt"    width="140" show-overflow-tooltip>
                         <template #header>
                             <HeaderTip tip="时间开度值(s)=百分比开度值(%)*35(s)(整数位取整)">新风阀开度(%)</HeaderTip>
@@ -282,17 +287,17 @@ const fetchDetailData = async () => {
 
 const CSV_HEADERS = [
     '序号','列车号','车厢','机组',
-    '室内温度(℃)','新风温度(℃)','设定温度(℃)','湿度(%)',
+    '车厢温度(℃)','回风温度(℃)','新风温度(℃)','设定温度(℃)','湿度(%)',
     '工作状态','通风机运行时间(秒)',
     '冷凝风机电流1(A)','冷凝风机电流2(A)',
     '压缩机电流1(A)','压缩机电流2(A)',
     '压缩机频率1(Hz)','压缩机频率2(Hz)',
     '送风机电流1(A)','送风机电流2(A)',
-    '高压1(bar)','低压1(bar)','高压2(bar)','低压2(bar)',
-    '送风温度1(℃)','送风温度2(℃)',
+    '高压1(bar)','低压1(bar)','高压2(bar)','低压2(bar)','压力差(bar)',
+    '吸风温度1(℃)','吸风温度2(℃)','送风温度1(℃)','送风温度2(℃)',
     '冷凝运行时间(秒)',
     '压缩机时间1(秒)','压缩机时间2(秒)',
-    '废排风机时间(秒)','新风阀开度(%)','回风阀开度(%)',
+    '废排风机时间(秒)','废排风机电流(A)','新风阀开度(%)','回风阀开度(%)',
     '废排风阀开度(%)','过热度1(K)','过热度2(K)',
     'CO₂(ppm)','PM2.5(ug/m³)','PM10(ug/m³)','TVOC(ppb)',
     '起始站','终点站','当前站','下一站',
@@ -304,14 +309,14 @@ const rowToCsv = (row, idx) => {
         idx+1, row.train_id ? `0${row.train_id}` : '',
         CARRIAGE_MAP[String(row.carriage_id)] || row.carriage_id,
         row.unit_name,
-        row.i_inner_temp, row.i_outer_temp, row.i_set_temp, row.i_hum,
+        row.i_inner_temp, row.i_back_temp, row.i_outer_temp, row.i_set_temp, row.i_hum,
         getModelName(row.work_status), row.dwef_op_tm,
         row.w_crnt_cf1, row.w_crnt_cf2, row.w_crnt_cp1, row.w_crnt_cp2,
         row.w_freq_cp1, row.w_freq_cp2, row.w_crnt_ef1, row.w_crnt_ef2,
-        row.i_high_pres1, row.i_low_pres1, row.i_high_pres2, row.i_low_pres2,
-        row.i_sat1, row.i_sat2,
+        row.i_high_pres1, row.i_low_pres1, row.i_high_pres2, row.i_low_pres2, row.i_pres_diff,
+        row.i_suckt1, row.i_suckt2, row.i_sat1, row.i_sat2,
         row.dwcf_op_tm1, row.dwcp_op_tm1, row.dwcp_op_tm2,
-        row.dwexufan_op_tm, row.dwfad_op_cnt, row.dwrad_op_cnt,
+        row.dwexufan_op_tm, row.i_exufan, row.dwfad_op_cnt, row.dwrad_op_cnt,
         row.dmp_exu_pos, row.i_sp_u1, row.i_sp_u2,
         row.i_co2, row.i_pm25, row.i_pm10, row.i_tvoc,
         getStationName(row.line_id, row.start_station),
