@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { Kysely, PostgresDialect } from 'kysely';
+import Cursor from 'pg-cursor';
 import type { Database } from '../repository/types.js';
 import { config } from './index.js';
 
@@ -18,10 +19,14 @@ pool.on('error', (err) => {
 
 /**
  * Kysely 强类型查询构造器实例
+ *
+ * cursor：pg-cursor 模块构造器，Kysely 用它实现 .stream() 流式查询。
+ * 未配置时调用 .stream() 会抛错 "cursor is not present in your postgres dialect config"。
  */
 export const db = new Kysely<Database>({
     dialect: new PostgresDialect({
         pool,
+        cursor: Cursor,
     }),
     log: (event) => {
         if (event.level === 'query') {

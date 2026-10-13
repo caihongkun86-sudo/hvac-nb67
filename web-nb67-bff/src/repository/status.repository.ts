@@ -651,6 +651,70 @@ export class StatusRepository {
     }
 
     /**
+     * 流式获取原始历史数据：用于"全量导出 CSV"场景，避免 OFFSET 深分页退化与内存膨胀。
+     *
+     * 实现说明：
+     *   - 用 db.transaction().execute() 拿到独立事务 + 连接
+     *   - 在事务内 SET LOCAL statement_timeout = '3min'（事务结束自动恢复，不影响其他请求）
+     *   - 单次 COUNT 取总数（用于 X-Total-Rows 头）
+     *   - Kysely .stream() 基于 pg-cursor 自动分页
+     *   - stream 必须在 consumer 回调内消费完，回调返回后连接会归还
+     *
+     * @param params 查询参数
+     * @param consumer 消费 stream 的回调，返回值会被透传给调用方
+     * @returns consumer 的返回值
+     */
+    static async streamRawHistory<T>(
+        params: {
+            trainId?: number | undefined;
+            carriageId?: number | undefined;
+            carriageIds?: number[] | undefined;
+            startTime: string;
+            endTime: string;
+        },
+        consumer: (stream: AsyncIterable<any>, total: number) => Promise<T>
+    ): Promise<T> {
+        // 事务 scope：callback 内的所有 SQL 共享同一连接
+        return db.transaction().execute(async (trx) => {
+            // 在事务内放宽 statement_timeout（只影响本事务）
+            // SET LOCAL 在事务结束自动恢复，不影响连接池里其他请求
+            await sql`SET LOCAL statement_timeout = '30min'`.execute(trx);
+
+            let baseQuery = trx
+                .selectFrom('hvac.fact_raw')
+                .where(this.timeCol as any, '>=', new Date(params.startTime))
+                .where(this.timeCol as any, '<=', new Date(params.endTime));
+
+            if (params.trainId) {
+                baseQuery = baseQuery.where('train_id', '=', params.trainId);
+            }
+
+            if (params.carriageIds && params.carriageIds.length > 0) {
+                baseQuery = baseQuery.where('carriage_id', 'in', params.carriageIds);
+            } else if (params.carriageId) {
+                baseQuery = baseQuery.where('carriage_id', '=', params.carriageId);
+            }
+
+            // 1. 取总数（只 COUNT 一次）
+            const totalResult = await baseQuery
+                .select(sql`count(*)`.as('count'))
+                .executeTakeFirst();
+            const total = Number((totalResult as any)?.count || 0);
+
+            // 2. 流式查询：selectAll + orderBy + stream
+            // 注意：stream 必须在 consumer 回调内消费完
+            const stream = await baseQuery
+                .selectAll()
+                .orderBy(this.timeCol as any, 'desc')
+                .stream();
+
+            // 3. 交给 consumer 在事务内消费完
+            // 事务在 consumer 完成后才 commit + 释放连接
+            return await consumer(stream, total);
+        });
+    }
+
+    /**
      * 获取故障统计供 Echart 渲染 (返回 vw_alarm_info_all_date)
      */
     static async getFaultStatistics() {
@@ -828,9 +892,9 @@ export class StatusRepository {
         if (params.unitNames && params.unitNames.length === 1) {
             const unit = params.unitNames[0];
             // 机组一级别预警
-            const u1Seqs = new Set([1,3,5,10,12,13,16,17,21,22,25]);
+            const u1Seqs = new Set([1,2,5,10,12,13,16,17,21,22,25]);
             // 机组二级别预警
-            const u2Seqs = new Set([2,4,6,11,14,15,18,19,23,24,26]);
+            const u2Seqs = new Set([3,4,6,11,14,15,18,19,23,24,26]);
             // 车厢级预警（不属于任何机组，选择特定机组时应排除）
             const carriageLevelSeqs = new Set([7,8,9,20,76]);
             list = list.filter((row: any) => {

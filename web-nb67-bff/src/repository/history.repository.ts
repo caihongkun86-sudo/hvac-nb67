@@ -90,7 +90,7 @@ export const TREND_PARAM_DEFS: Record<string, {
 // 查询类型到物化视图的映射
 const VIEW_MAP: Record<string, { view: string; bucketSize: string; lookback: string; useView: boolean }> = {
     hour:  { view: 'hvac.fact_raw',       bucketSize: '10 seconds', lookback: '1 hour',   useView: false },
-    day:   { view: 'hvac.fact_raw',       bucketSize: '1 minute',   lookback: '24 hours', useView: false },
+    day:   { view: 'hvac.fact_raw_1min',  bucketSize: '1 minute',   lookback: '24 hours',  useView: true },
     week:  { view: 'hvac.fact_raw_15min', bucketSize: '15 minutes', lookback: '168 hours', useView: true },
     month: { view: 'hvac.fact_raw_15min', bucketSize: '30 minutes', lookback: '720 hours', useView: true },
 };
@@ -199,8 +199,8 @@ export class HistoryRepository {
         triggerTime: Date,
         warnCode: string
     ) {
-        const startTime = new Date(triggerTime.getTime() - 60 * 60 * 1000);
-        const endTime   = new Date(triggerTime.getTime() + 60 * 60 * 1000);
+        const startTime = new Date(triggerTime.getTime() - 35 * 60 * 1000);
+        const endTime   = new Date(triggerTime.getTime() + 5 * 60 * 1000);
 
         // HVAC 预警码格式：HVAC{carriage_id*100+seq}
         const paramsBySeq: Record<number, string[]> = {
@@ -244,64 +244,32 @@ export class HistoryRepository {
         }
         const validParams = params.filter(p => TREND_PARAM_DEFS[p]);
 
-        const bucketSize = '60 seconds';
-
         const buildQuery = (tableName: string, isView: boolean) => {
             const selects: any[] = [
-                sql.raw(`time_bucket('${bucketSize}', ${isView ? 'bucket' : 'event_time'})`).as('bucket'),
+                sql.raw('event_time').as('bucket'),
             ];
 
             for (const key of validParams) {
                 const def = TREND_PARAM_DEFS[key]!;
-                if (isView) {
-                    selects.push(sql.raw(`ROUND(AVG(${def.viewCol}), 1)`).as(key));
-                } else {
-                    const colExpr = def.col.includes("->")
-                        ? `(${def.col})::numeric`
-                        : `${def.col}::numeric`;
-                    selects.push(sql.raw(`ROUND(AVG(${colExpr}) / ${def.scale}, 1)`).as(key));
-                }
+                const colExpr = def.col.includes("->")
+                    ? `(${def.col})::numeric`
+                    : `${def.col}::numeric`;
+                selects.push(sql.raw(`ROUND(${colExpr} / ${def.scale}, 1)`).as(key));
             }
 
-            const timeFilterCol = isView ? 'bucket' : 'event_time';
             return db
                 .selectFrom(tableName as any)
                 .select(selects)
                 .where('train_id', '=', trainId)
                 .where('carriage_id', '=', carriageId)
-                .where(sql.raw(timeFilterCol), '>=', startTime)
-                .where(sql.raw(timeFilterCol), '<=', endTime)
-                .groupBy('bucket')
-                .orderBy('bucket', 'asc');
+                .where('event_time', '>=', startTime)
+                .where('event_time', '<=', endTime)
+                .orderBy('event_time', 'asc');
         };
 
-        // 优先使用物化视图，失败或返回空时降级到原始表
         let rows: any[];
-        const viewUsable =
-            !factRaw1minState ||
-            factRaw1minState.available ||
-            Date.now() - factRaw1minState.checkedAt > VIEW_CHECK_TTL_MS;
-
-        if (viewUsable) {
-            try {
-                const query = buildQuery('hvac.fact_raw_1min' as any, true);
-                rows = await this.executeWithTimeout(query.execute(), QUERY_TIMEOUT_MS);
-                if (rows.length === 0) {
-                    throw new Error('empty result (not yet refreshed for this time range)');
-                }
-                factRaw1minState = { available: true, checkedAt: Date.now() };
-            } catch (err: any) {
-                if (err?.code === '42P01') {
-                    factRaw1minState = { available: false, checkedAt: Date.now() };
-                }
-                console.warn(`[HistoryRepository] fact_raw_1min 物化视图查询失败，降级到原始表: ${err.message}`);
-                const fallbackQuery = buildQuery('hvac.fact_raw', false);
-                rows = await this.executeWithTimeout(fallbackQuery.execute(), QUERY_TIMEOUT_MS);
-            }
-        } else {
-            const fallbackQuery = buildQuery('hvac.fact_raw', false);
-            rows = await this.executeWithTimeout(fallbackQuery.execute(), QUERY_TIMEOUT_MS);
-        }
+        const fallbackQuery = buildQuery('hvac.fact_raw', false);
+        rows = await this.executeWithTimeout(fallbackQuery.execute(), QUERY_TIMEOUT_MS);
 
         return {
             params: validParams.map(k => ({ key: k, ...TREND_PARAM_DEFS[k] })),

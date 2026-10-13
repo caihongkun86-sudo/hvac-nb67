@@ -23,12 +23,14 @@
     "kafkajs-snappy": "^1.1.0",
     "kysely": "^0.28.11",
     "pg": "^8.18.0",
+    "pg-cursor": "^2.22.0",
     "snappy": "^7.3.3",
     "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
     "@types/pg": "^8.16.0",
+    "@types/pg-cursor": "^2.7.2",
     "@types/ws": "^8.18.1",
     "axios": "^1.13.5",
     "tsx": "^4.21.0",

@@ -12,6 +12,7 @@
                     multiple
                     collapse-tags
                     collapse-tags-tooltip
+                    popper-class="trend-collapse-popper"
                     placeholder="选择参数"
                     size="small"
                     style="width:220px;margin-right:10px"
@@ -294,5 +295,31 @@ onUnmounted(() => {
     border-color: #2186cf !important;
     color: #ffffff !important;
     .el-tag__close, .el-tag__content { color: #ffffff !important; }
+}
+
+/* 折叠标签 "+N" 悬浮提示：默认 is-light 白底，改为深色（popper 挂载在 body，必须全局样式）
+   popper-class 同时会挂到下拉面板上，用 :has(.el-select__selection) 只命中折叠提示 */
+.el-popper.trend-collapse-popper:has(.el-select__selection) {
+    background-color: #101626 !important;
+    border: 1px solid #2186cf !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+
+    .el-select__selection {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        max-width: 320px;
+    }
+    .el-tag.in-tooltip {
+        background-color: rgba(33,134,207,0.2) !important;
+        border-color: #2186cf !important;
+        color: #ffffff !important;
+        .el-tag__close { color: #ffffff !important; }
+    }
+    .el-popper__arrow::before {
+        background-color: #101626 !important;
+        border-color: #2186cf !important;
+    }
 }
 </style>

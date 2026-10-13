@@ -70,6 +70,13 @@ export const getThDataByDvcAddrApi = (params) => request('/api/rest/carriage/Tem
 // 获取指定列车最近10分钟的各节车厢数据
 export const getTrainDataApi = (params) => request('/api/getTrainData', 'get', params)
 
+// 流式导出历史数据 CSV（适配 historyData/index.vue 的"下载 ZIP"按钮）
+// 返回完整 URL，由前端 downloadStream 工具消费（fetch + ReadableStream + 连接重试）
+export const getTrainDataExportUrl = (params) => {
+    const qs = new URLSearchParams(params).toString()
+    return `/api/getTrainData/export?${qs}`
+}
+
 // 获取指定时间范围内存有数据的对应日期列表
 export const getTrainDataDatesApi = (params) => request('/api/getTrainDataDates', 'get', params)
 

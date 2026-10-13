@@ -11,6 +11,7 @@ import { KafkaManager } from './config/kafka.js';
 import { HistoryRepository, TREND_PARAM_DEFS } from './repository/history.repository.js';
 import { StatusRepository } from './repository/status.repository.js';
 import { formatTime } from './utils/time.js';
+import { getModelName, getStationName } from './utils/labels.js';
 
 const fastify = Fastify({
     logger: {
@@ -585,6 +586,258 @@ async function bootstrap() {
             };
         });
 
+        // 历史数据流式导出 CSV（适配 historyData/index.vue 的"下载 ZIP"按钮）
+        // 改进：单次请求流式输出，避免前端循环分页 + DB 重复 COUNT；响应头 X-Total-Rows 供前端进度展示
+        //
+        // 连接管理：streamRawHistory 在 transaction scope 内执行（含 SET LOCAL statement_timeout），
+        // consumer 回调必须把 stream 消费完，回调返回后事务才 commit、连接才归还。
+        fastify.get('/api/getTrainData/export', async (request: any, reply: any) => {
+            const { state, carriageIds, startTime, endTime, unitName = '' } = request.query;
+
+            // 参数解析与 /api/getTrainData 一致
+            const trainId = state ? parseInt(String(state).slice(0, -2)) : undefined;
+            const carriageId = state ? parseInt(String(state).slice(-2)) : undefined;
+
+            let parsedCarriageIds: number[] | undefined;
+            if (carriageIds) {
+                parsedCarriageIds = String(carriageIds)
+                    .split(',')
+                    .map((c: string) => parseInt(c.trim()))
+                    .filter((c: number) => !isNaN(c));
+            }
+
+            const isAllUnits = !unitName;
+
+            // 时间范围校验：最多 7 天，与前端一致
+            const start = new Date(startTime);
+            const end = new Date(endTime);
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                reply.code(400);
+                return { code: 400, message: 'startTime/endTime 参数无效' };
+            }
+            const dayDiff = (end.getTime() - start.getTime()) / 86400000;
+            if (dayDiff > 7) {
+                reply.code(400);
+                return { code: 400, message: '时间范围最多 7 天' };
+            }
+
+            // 车厢号 → 车型名映射（与 /api/getTrainData 路由一致）
+            const CARRIAGE_MAP: Record<string, string> = { '1': 'TC1', '2': 'MP1', '3': 'M1', '4': 'M2', '5': 'MP2', '6': 'TC2' };
+
+            // 文件名（车厢范围标签）
+            const carriageLabel = parsedCarriageIds && parsedCarriageIds.length > 0
+                ? parsedCarriageIds.map((c: number) => CARRIAGE_MAP[String(c)] || c).join('-')
+                : 'all';
+            const fname = `history_0${trainId ?? '0000'}_${carriageLabel}_${new Date().toISOString().slice(0, 10)}.csv`;
+
+            // CSV 表头（与前端 CSV_HEADERS 一致）
+            const CSV_HEADERS = [
+                '序号', '列车号', '车厢', '机组',
+                '车厢温度(℃)', '回风温度(℃)', '新风温度(℃)', '设定温度(℃)', '湿度(%)',
+                '工作状态', '通风机运行时间(秒)',
+                '冷凝风机电流1(A)', '冷凝风机电流2(A)',
+                '压缩机电流1(A)', '压缩机电流2(A)',
+                '压缩机频率1(Hz)', '压缩机频率2(Hz)',
+                '送风机电流1(A)', '送风机电流2(A)',
+                '高压1(bar)', '低压1(bar)', '高压2(bar)', '低压2(bar)', '压力差(bar)',
+                '吸风温度1(℃)', '吸风温度2(℃)', '送风温度1(℃)', '送风温度2(℃)',
+                '冷凝运行时间(秒)',
+                '压缩机时间1(秒)', '压缩机时间2(秒)',
+                '废排风机时间(秒)', '废排风机电流(A)', '新风阀开度(%)', '回风阀开度(%)',
+                '废排风阀开度(%)', '过热度1(K)', '过热度2(K)',
+                'CO₂(ppm)', 'PM2.5(ug/m³)', 'PM10(ug/m³)', 'TVOC(ppb)',
+                '起始站', '终点站', '当前站', '下一站',
+                '设备上报时间'
+            ];
+
+            // CSV 字段转义：null→空，含双引号/逗号/换行→双引号包裹并 "" 转义
+            const esc = (v: any): string => {
+                if (v === null || v === undefined) return '';
+                const s = String(v);
+                return /["\n,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+            };
+
+            const rowToLine = (row: any, idx: number): string => {
+                const fields = [
+                    idx + 1,
+                    row.train_id ? `0${row.train_id}` : '',
+                    CARRIAGE_MAP[String(row.carriage_id)] || row.carriage_id,
+                    row.unit_name,
+                    row.i_inner_temp, row.i_back_temp, row.i_outer_temp, row.i_set_temp, row.i_hum,
+                    getModelName(row.work_status), row.dwef_op_tm,
+                    row.w_crnt_cf1, row.w_crnt_cf2, row.w_crnt_cp1, row.w_crnt_cp2,
+                    row.w_freq_cp1, row.w_freq_cp2, row.w_crnt_ef1, row.w_crnt_ef2,
+                    row.i_high_pres1, row.i_low_pres1, row.i_high_pres2, row.i_low_pres2, row.i_pres_diff,
+                    row.i_suckt1, row.i_suckt2, row.i_sat1, row.i_sat2,
+                    row.dwcf_op_tm1, row.dwcp_op_tm1, row.dwcp_op_tm2,
+                    row.dwexufan_op_tm, row.i_exufan, row.dwfad_op_cnt, row.dwrad_op_cnt,
+                    row.dmp_exu_pos, row.i_sp_u1, row.i_sp_u2,
+                    row.i_co2, row.i_pm25, row.i_pm10, row.i_tvoc,
+                    getStationName(row.line_id, row.start_station),
+                    getStationName(row.line_id, row.terminal_station),
+                    getStationName(row.line_id, row.cur_station),
+                    getStationName(row.line_id, row.next_station),
+                    row.event_time
+                ];
+                return fields.map(esc).join(',');
+            };
+
+            // 调用 streamRawHistory：在 transaction scope 内执行
+            // consumer 回调必须把 stream 消费完，返回后事务才 commit
+            try {
+                await StatusRepository.streamRawHistory(
+                    {
+                        trainId,
+                        carriageId,
+                        carriageIds: parsedCarriageIds && parsedCarriageIds.length > 0 ? parsedCarriageIds : undefined,
+                        startTime: String(startTime || ''),
+                        endTime: String(endTime || ''),
+                    },
+                    async (stream, factTotal) => {
+                        // 全部机组时总数翻倍（与 /api/getTrainData 语义一致）
+                        const displayTotal = isAllUnits ? factTotal * 2 : factTotal;
+
+                        // 在 consumer 内设置响应头：此时已拿到 total，可以填 X-Total-Rows
+                        reply.header('Content-Type', 'text/csv; charset=utf-8');
+                        reply.header('Content-Disposition', `attachment; filename="${fname}"`);
+                        reply.header('X-Total-Rows', String(displayTotal));
+                        reply.header('Cache-Control', 'no-store');
+
+                        // 写入 BOM + CSV 表头
+                        reply.raw.write('\uFEFF' + CSV_HEADERS.join(',') + '\n');
+
+                        let idx = 0;
+                        try {
+                            for await (const row of stream) {
+                                const raw = row.payload_json?.raw || {};
+                                const eventTimeStr = formatTime(row.event_time);
+
+                                const unit1 = {
+                                    train_id: row.train_id,
+                                    carriage_id: row.carriage_id,
+                                    event_time: eventTimeStr,
+                                    unit_name: '机组一',
+                                    i_inner_temp: raw.Tveh1 !== undefined ? (Number(raw.Tveh1) / 10).toFixed(1) : '',
+                                    i_back_temp: raw.RasU1 !== undefined ? (Number(raw.RasU1) / 10).toFixed(1) : '',
+                                    i_outer_temp: raw.FasU1 !== undefined ? (Number(raw.FasU1) / 10).toFixed(1) : '',
+                                    i_set_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
+                                    i_hum: raw.AqHU1 !== undefined ? (Number(raw.AqHU1) / 10).toFixed(1) : '',
+                                    i_sp_u1: raw.SpU11 !== undefined ? (Number(raw.SpU11) / 10).toFixed(1) : '',
+                                    i_sp_u2: raw.SpU12 !== undefined ? (Number(raw.SpU12) / 10).toFixed(1) : '',
+                                    i_co2: raw.AqCo2U1 ?? '',
+                                    i_pm25: raw.AqPm25U1 ?? '',
+                                    i_pm10: raw.AqPm10U1 ?? '',
+                                    i_tvoc: raw.AqTvocU1 ?? '',
+                                    work_status: raw.WmodeU1 ?? '',
+                                    dwef_op_tm: raw.DwefOpTmU11 ?? '',
+                                    w_crnt_cf1: raw.ICfU11 !== undefined ? (Number(raw.ICfU11) / 10).toFixed(1) : '',
+                                    w_crnt_cf2: raw.ICfU12 !== undefined ? (Number(raw.ICfU12) / 10).toFixed(1) : '',
+                                    w_crnt_cp1: raw.ICpU11 !== undefined ? (Number(raw.ICpU11) / 10).toFixed(1) : '',
+                                    w_crnt_cp2: raw.ICpU12 !== undefined ? (Number(raw.ICpU12) / 10).toFixed(1) : '',
+                                    w_freq_cp1: raw.FCpU11 !== undefined ? (Number(raw.FCpU11) / 10).toFixed(1) : '',
+                                    w_freq_cp2: raw.FCpU12 !== undefined ? (Number(raw.FCpU12) / 10).toFixed(1) : '',
+                                    w_crnt_ef1: raw.IEfU11 !== undefined ? (Number(raw.IEfU11) / 10).toFixed(1) : '',
+                                    w_crnt_ef2: raw.IEfU12 !== undefined ? (Number(raw.IEfU12) / 10).toFixed(1) : '',
+                                    i_high_pres1: raw.HighpressU11 !== undefined ? (Number(raw.HighpressU11) / 10).toFixed(1) : '',
+                                    i_low_pres1: raw.SuckpU11 !== undefined ? (Number(raw.SuckpU11) / 10).toFixed(1) : '',
+                                    i_high_pres2: raw.HighpressU12 !== undefined ? (Number(raw.HighpressU12) / 10).toFixed(1) : '',
+                                    i_low_pres2: raw.SuckpU12 !== undefined ? (Number(raw.SuckpU12) / 10).toFixed(1) : '',
+                                    i_sat1: raw.SasU11 !== undefined ? (Number(raw.SasU11) / 10).toFixed(1) : '',
+                                    i_sat2: raw.SasU12 !== undefined ? (Number(raw.SasU12) / 10).toFixed(1) : '',
+                                    i_suckt1: raw.SucktU11 !== undefined ? (Number(raw.SucktU11) / 10).toFixed(1) : '',
+                                    i_suckt2: raw.SucktU12 !== undefined ? (Number(raw.SucktU12) / 10).toFixed(1) : '',
+                                    i_pres_diff: raw.PresdiffU1 !== undefined ? (Number(raw.PresdiffU1) / 10).toFixed(1) : '',
+                                    i_exufan: raw.IExufan !== undefined ? (Number(raw.IExufan) / 10).toFixed(1) : '',
+                                    dwcf_op_tm1: raw.DwcfOpTmU11 ?? '',
+                                    dwcp_op_tm1: raw.DwcpOpTmU11 ?? '',
+                                    dwcp_op_tm2: raw.DwcpOpTmU12 ?? '',
+                                    dwexufan_op_tm: raw.DwexufanOpTm ?? '',
+                                    dwfad_op_cnt: raw.FadposU1 ?? '',
+                                    dwrad_op_cnt: raw.RadposU1 ?? '',
+                                    dmp_exu_pos: raw.DmpExuPos ?? '',
+                                    start_station: raw.StartStation ?? '',
+                                    terminal_station: raw.TerminalStation ?? '',
+                                    cur_station: raw.CurStation ?? '',
+                                    next_station: raw.NextStation ?? '',
+                                    line_id: row.line_id ?? '',
+                                };
+                                const unit2 = {
+                                    train_id: row.train_id,
+                                    carriage_id: row.carriage_id,
+                                    event_time: eventTimeStr,
+                                    unit_name: '机组二',
+                                    i_inner_temp: raw.Tveh2 !== undefined ? (Number(raw.Tveh2) / 10).toFixed(1) : '',
+                                    i_back_temp: raw.RasU2 !== undefined ? (Number(raw.RasU2) / 10).toFixed(1) : '',
+                                    i_outer_temp: raw.FasU2 !== undefined ? (Number(raw.FasU2) / 10).toFixed(1) : '',
+                                    i_set_temp: raw.Tic !== undefined ? (Number(raw.Tic) / 10).toFixed(1) : '',
+                                    i_sp_u1: raw.SpU21 !== undefined ? (Number(raw.SpU21) / 10).toFixed(1) : '',
+                                    i_sp_u2: raw.SpU22 !== undefined ? (Number(raw.SpU22) / 10).toFixed(1) : '',
+                                    i_hum: raw.AqHU2 !== undefined ? (Number(raw.AqHU2) / 10).toFixed(1) : '',
+                                    i_co2: raw.AqCo2U2 ?? '',
+                                    i_pm25: raw.AqPm25U2 ?? '',
+                                    i_pm10: raw.AqPm10U2 ?? '',
+                                    i_tvoc: raw.AqTvocU2 ?? '',
+                                    work_status: raw.WmodeU2 ?? '',
+                                    dwef_op_tm: raw.DwefOpTmU21 ?? '',
+                                    w_crnt_cf1: raw.ICfU21 !== undefined ? (Number(raw.ICfU21) / 10).toFixed(1) : '',
+                                    w_crnt_cf2: raw.ICfU22 !== undefined ? (Number(raw.ICfU22) / 10).toFixed(1) : '',
+                                    w_crnt_cp1: raw.ICpU21 !== undefined ? (Number(raw.ICpU21) / 10).toFixed(1) : '',
+                                    w_crnt_cp2: raw.ICpU22 !== undefined ? (Number(raw.ICpU22) / 10).toFixed(1) : '',
+                                    w_freq_cp1: raw.FCpU21 !== undefined ? (Number(raw.FCpU21) / 10).toFixed(1) : '',
+                                    w_freq_cp2: raw.FCpU22 !== undefined ? (Number(raw.FCpU22) / 10).toFixed(1) : '',
+                                    w_crnt_ef1: raw.IEfU21 !== undefined ? (Number(raw.IEfU21) / 10).toFixed(1) : '',
+                                    w_crnt_ef2: raw.IEfU22 !== undefined ? (Number(raw.IEfU22) / 10).toFixed(1) : '',
+                                    i_high_pres1: raw.HighpressU21 !== undefined ? (Number(raw.HighpressU21) / 10).toFixed(1) : '',
+                                    i_low_pres1: raw.SuckpU21 !== undefined ? (Number(raw.SuckpU21) / 10).toFixed(1) : '',
+                                    i_high_pres2: raw.HighpressU22 !== undefined ? (Number(raw.HighpressU22) / 10).toFixed(1) : '',
+                                    i_low_pres2: raw.SuckpU22 !== undefined ? (Number(raw.SuckpU22) / 10).toFixed(1) : '',
+                                    i_sat1: raw.SasU21 !== undefined ? (Number(raw.SasU21) / 10).toFixed(1) : '',
+                                    i_sat2: raw.SasU22 !== undefined ? (Number(raw.SasU22) / 10).toFixed(1) : '',
+                                    i_suckt1: raw.SucktU21 !== undefined ? (Number(raw.SucktU21) / 10).toFixed(1) : '',
+                                    i_suckt2: raw.SucktU22 !== undefined ? (Number(raw.SucktU22) / 10).toFixed(1) : '',
+                                    i_pres_diff: raw.PresdiffU2 !== undefined ? (Number(raw.PresdiffU2) / 10).toFixed(1) : '',
+                                    i_exufan: raw.IExufan !== undefined ? (Number(raw.IExufan) / 10).toFixed(1) : '',
+                                    dwcf_op_tm1: raw.DwcfOpTmU21 ?? '',
+                                    dwcp_op_tm1: raw.DwcpOpTmU21 ?? '',
+                                    dwcp_op_tm2: raw.DwcpOpTmU22 ?? '',
+                                    dwexufan_op_tm: '',
+                                    dwfad_op_cnt: raw.FadposU2 ?? '',
+                                    dwrad_op_cnt: raw.RadposU2 ?? '',
+                                    dmp_exu_pos: raw.DmpExuPos ?? '',
+                                    start_station: raw.StartStation ?? '',
+                                    terminal_station: raw.TerminalStation ?? '',
+                                    cur_station: raw.CurStation ?? '',
+                                    next_station: raw.NextStation ?? '',
+                                    line_id: row.line_id ?? '',
+                                };
+
+                                const units = isAllUnits ? [unit1, unit2] : [String(unitName) === '机组二' ? unit2 : unit1];
+                                for (const u of units) {
+                                    reply.raw.write(rowToLine(u, idx) + '\n');
+                                    idx++;
+                                }
+                            }
+                            reply.raw.end();
+                        } catch (streamErr: any) {
+                            request.log.error(streamErr, 'history export stream write failed');
+                            // 流已经写出过部分数据，无法切换为 JSON 错误响应；写入末尾错误注释后结束
+                            reply.raw.write(`\n# ERROR: ${streamErr?.message || 'stream failed'}\n`);
+                            reply.raw.end();
+                            // 抛回上层让 transaction 也 rollback
+                            throw streamErr;
+                        }
+                    }
+                );
+            } catch (err: any) {
+                request.log.error(err, 'history export stream failed');
+                // 若 reply 已开始写入（headers sent），无法切换为 JSON 错误响应
+                if (!reply.sent) {
+                    reply.code(500);
+                    return { code: 500, message: err?.message || 'export failed' };
+                }
+            }
+        });
+
         // B2: 历史报警导出 CSV
         fastify.get('/api/export/alarm', async (request: any, reply: any) => {
             const { trainNo, carriageNos, unitNames, startTime, endTime } = request.query;
@@ -650,8 +903,8 @@ async function bootstrap() {
                         // 车厢级预警（不属于任何机组）
                         const carriageLevelSeqs = new Set([7,8,9,20,76]);
                         if (carriageLevelSeqs.has(seq)) return '-';
-                        if ([1,3,5,10,12,13,16,17,21,22,25].includes(seq)) return '机组一';
-                        if ([2,4,6,11,14,15,18,19,23,24,26].includes(seq)) return '机组二';
+                        if ([1,2,5,10,12,13,16,17,21,22,25].includes(seq)) return '机组一';
+                        if ([3,4,6,11,14,15,18,19,23,24,26].includes(seq)) return '机组二';
                     }
                     if (c.includes('u2')) return '机组二';
                     if (c.includes('u1')) return '机组一';

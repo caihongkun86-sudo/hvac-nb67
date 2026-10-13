@@ -56,7 +56,8 @@
                     <span class="title-text">历史数据</span>
                     <span class="record-count" v-if="detailTotal > 0">共 {{ detailTotal }} 条</span>
                     <div style="flex:1"></div>
-                    <el-button type="primary" size="small" icon="Download" :loading="downloading" @click="handleDownload">下载 ZIP</el-button>
+                    <span v-if="downloadProgress" class="record-count">{{ downloadProgress }}</span>
+                    <el-button type="primary" size="small" icon="Download" :loading="downloading" @click="handleDownload">下载 CSV</el-button>
                 </div>
 
                 <el-table
@@ -164,12 +165,12 @@
 <script setup>
 import { ref, reactive, onMounted, watch, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getTrainDataApi } from '@/api/api'
+import { getTrainDataApi, getTrainDataExportUrl } from '@/api/api'
 import dayjs from 'dayjs'
 import { ElMessage, ElTooltip, ElIcon } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
-import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
+import downloadStream from '@/utils/downloadStream.js'
 import { getStationName } from '@/config/stationMap.js'
 import { getModelName } from '@/config/modelMap.js'
 
@@ -234,6 +235,7 @@ const onCalendarChange = ([start]) => {
 
 const loading = ref(false)
 const downloading = ref(false)
+const downloadProgress = ref('')
 const detailList = ref([])
 const detailPage = ref(1)
 const detailPageSize = ref(20)
@@ -285,49 +287,6 @@ const fetchDetailData = async () => {
     }
 }
 
-const CSV_HEADERS = [
-    '序号','列车号','车厢','机组',
-    '车厢温度(℃)','回风温度(℃)','新风温度(℃)','设定温度(℃)','湿度(%)',
-    '工作状态','通风机运行时间(秒)',
-    '冷凝风机电流1(A)','冷凝风机电流2(A)',
-    '压缩机电流1(A)','压缩机电流2(A)',
-    '压缩机频率1(Hz)','压缩机频率2(Hz)',
-    '送风机电流1(A)','送风机电流2(A)',
-    '高压1(bar)','低压1(bar)','高压2(bar)','低压2(bar)','压力差(bar)',
-    '吸风温度1(℃)','吸风温度2(℃)','送风温度1(℃)','送风温度2(℃)',
-    '冷凝运行时间(秒)',
-    '压缩机时间1(秒)','压缩机时间2(秒)',
-    '废排风机时间(秒)','废排风机电流(A)','新风阀开度(%)','回风阀开度(%)',
-    '废排风阀开度(%)','过热度1(K)','过热度2(K)',
-    'CO₂(ppm)','PM2.5(ug/m³)','PM10(ug/m³)','TVOC(ppb)',
-    '起始站','终点站','当前站','下一站',
-    '设备上报时间'
-]
-
-const rowToCsv = (row, idx) => {
-    const fields = [
-        idx+1, row.train_id ? `0${row.train_id}` : '',
-        CARRIAGE_MAP[String(row.carriage_id)] || row.carriage_id,
-        row.unit_name,
-        row.i_inner_temp, row.i_back_temp, row.i_outer_temp, row.i_set_temp, row.i_hum,
-        getModelName(row.work_status), row.dwef_op_tm,
-        row.w_crnt_cf1, row.w_crnt_cf2, row.w_crnt_cp1, row.w_crnt_cp2,
-        row.w_freq_cp1, row.w_freq_cp2, row.w_crnt_ef1, row.w_crnt_ef2,
-        row.i_high_pres1, row.i_low_pres1, row.i_high_pres2, row.i_low_pres2, row.i_pres_diff,
-        row.i_suckt1, row.i_suckt2, row.i_sat1, row.i_sat2,
-        row.dwcf_op_tm1, row.dwcp_op_tm1, row.dwcp_op_tm2,
-        row.dwexufan_op_tm, row.i_exufan, row.dwfad_op_cnt, row.dwrad_op_cnt,
-        row.dmp_exu_pos, row.i_sp_u1, row.i_sp_u2,
-        row.i_co2, row.i_pm25, row.i_pm10, row.i_tvoc,
-        getStationName(row.line_id, row.start_station),
-        getStationName(row.line_id, row.terminal_station),
-        getStationName(row.line_id, row.cur_station),
-        getStationName(row.line_id, row.next_station),
-        row.event_time
-    ]
-    return fields.map(v => (v == null ? '' : `"${String(v).replace(/"/g, '""')}"`)).join(',')
-}
-
 const handleDownload = async () => {
     if (!filterForm.timeRange || filterForm.timeRange.length < 2) return
 
@@ -338,55 +297,54 @@ const handleDownload = async () => {
     }
 
     downloading.value = true
+    downloadProgress.value = ''
     try {
         const carriageNos = filterForm.carriageNos || []
         const targetCarriages = carriageNos.length > 0 ? carriageNos : ['1', '2', '3', '4', '5', '6']
-        
-        let page = 1; let allRows = []
-        let serverTotal = 0
-        
-        while (true) {
-            const res = await getTrainDataApi({
-                state: `${filterForm.trainNo}01`,
-                carriageIds: targetCarriages.join(','),
-                startTime: filterForm.timeRange[0],
-                endTime: filterForm.timeRange[1],
-                unitName: filterForm.unitName || '',
-                page, limit: 500
-            })
-            
-            const batch = res?.data?.list || []
-            allRows = allRows.concat(batch)
-            
-            if (res?.data?.total) serverTotal = res.data.total
 
-            // 终止条件：已取完服务端总数 / 当前批不足 500 / 安全上限 2000 页（100 万条）
-            const done = (serverTotal > 0 && allRows.length >= serverTotal)
-                || batch.length < 500
-                || page >= 2000
-            if (done) break
-            page++
-        }
-        
-        if (allRows.length === 0) { ElMessage.warning('暂无数据'); return }
-        
-        const csv = '﻿' + CSV_HEADERS.join(',') + '\n' + allRows.map(rowToCsv).join('\n')
-        const zip = new JSZip()
-        
-        // 文件名显示选择的车厢范围
-        const carriageLabel = carriageNos.length > 0 
+        // 文件名沿用原实现：历史数据_0{列车号}_{车厢范围}_{YYYYMMDD}.csv
+        // （原实现为 ZIP 包、包内 CSV 同名；流式改造后直接下载 CSV，扩展名保持 .csv）
+        const carriageLabel = carriageNos.length > 0
             ? carriageNos.map(c => CARRIAGE_MAP[c] || c).join('-')
             : '全部车厢'
         const fname = `历史数据_0${filterForm.trainNo}_${carriageLabel}_${dayjs().format('YYYYMMDD')}.csv`
-        
-        zip.file(fname, csv)
-        const blob = await zip.generateAsync({ type:'blob', compression:'DEFLATE', compressionOptions:{level:6} })
-        saveAs(blob, fname.replace('.csv', '.zip'))
-        ElMessage.success(`已下载 ${allRows.length} 条`)
+
+        const url = getTrainDataExportUrl({
+            state: `${filterForm.trainNo}01`,
+            carriageIds: targetCarriages.join(','),
+            startTime: filterForm.timeRange[0],
+            endTime: filterForm.timeRange[1],
+            unitName: filterForm.unitName || '',
+        })
+
+        // 流式下载：fetch + ReadableStream 边读边累积 chunks
+        // - X-Total-Rows 头：服务端总行数（用于进度展示）
+        // - 连接阶段失败自动重试 3 次；开始接收数据后中断不重试（避免半截文件 + 续传复杂度）
+        const { blob, totalRows, bytes } = await downloadStream(url, {
+            retries: 3,
+            onProgress: (received, total) => {
+                if (total && total > 0) {
+                    // 按"估算行数 / 总行数"显示百分比
+                    // 粗略估算：每行平均 ~250 字节（含中文多字节）
+                    const estRows = Math.floor(received / 250)
+                    const pct = Math.min(99, Math.floor((estRows / total) * 100))
+                    downloadProgress.value = `下载中 ${pct}% (约 ${estRows}/${total} 行)`
+                } else {
+                    downloadProgress.value = `下载中 ${(received / 1024 / 1024).toFixed(1)} MB`
+                }
+            },
+        })
+
+        if (bytes === 0) { ElMessage.warning('暂无数据'); return }
+        // 文件名以前端原实现拼法为准（服务端 Content-Disposition 的英文名仅作直连兜底）
+        saveAs(blob, fname)
+        ElMessage.success(`已下载 ${totalRows !== null ? totalRows + ' 条' : (bytes / 1024).toFixed(0) + ' KB'}`)
     } catch (err) {
-        console.error('下载失败:', err); ElMessage.error('下载失败')
+        console.error('下载失败:', err)
+        ElMessage.error(`下载失败: ${err?.message || '未知错误'}`)
     } finally {
         downloading.value = false
+        downloadProgress.value = ''
     }
 }
 
