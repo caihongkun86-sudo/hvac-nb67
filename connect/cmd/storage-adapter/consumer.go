@@ -192,17 +192,19 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 				// alarm 消息仍进入 batch（保证 offset 正常提交），flats 保持为空。
 				flats := make([]EventFlatRecord, 0, len(ev.Hits))
 				if eventType != "alarm" {
-					for _, hit := range ev.Hits {
+					for i := range ev.Hits {
+						hit := &ev.Hits[i]
 						sev := hit.Severity
 						if hit.Level != nil {
 							sev = *hit.Level
 						}
 
 						// hit.EventMeta 在旧 schema 中携带元数据；新 schema 走顶层
-						meta := hit.EventMeta
-						if meta.DeviceID == "" {
-							meta = topMeta
+						// 先回填到 hit 上，保证 marshal 出的 payload_json 元数据完整
+						if hit.EventMeta.DeviceID == "" {
+							hit.EventMeta = topMeta
 						}
+						meta := hit.EventMeta
 
 						// 为了方便以后分析，payload_json 包含原始 hit 信息
 						payload, _ := json.Marshal(hit)
@@ -232,10 +234,15 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 						CarriageID:    topMeta.CarriageIDInt32(),
 						EventTimeText: topMeta.EventTimeText,
 					}
-					for _, hit := range ev.Hits {
+					for i := range ev.Hits {
+						hit := &ev.Hits[i]
 						sev := hit.Severity
 						if hit.Level != nil {
 							sev = *hit.Level
+						}
+						// 顶层 meta 回填，保证 trigger_snapshot 中 event_meta 完整
+						if hit.EventMeta.DeviceID == "" {
+							hit.EventMeta = topMeta
 						}
 						payload, _ := json.Marshal(hit)
 						frame.Hits = append(frame.Hits, PredictHitMeta{

@@ -78,12 +78,26 @@ CREATE TRIGGER trg_warning_config_updated_at
 INSERT INTO hvac.warning_config
     (warn_code, component_name, category, threshold_good, threshold_normal, threshold_bad,
      trigger_operator, trigger_value, clear_value, duration_seconds, unit, strategy, params)
-SELECT 'WARN_CABIN_OVERHEAT', '车厢超温预警', 'temperature',
-       '目标温度±2℃', '目标温度+2~4℃', '>目标温度+4℃',
-       '>', 4.0, 3.0, 120,
-       '℃', '车厢制冷效果异常，可能为车门持续开启、蒸发器脏堵、冷媒少量泄漏或控制逻辑异常，请检修',
-       '{"min_cooling_runtime_min": 20, "trigger_duration_min": 2, "precondition": "no_alarm AND cooling_mode"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM hvac.warning_config WHERE warn_code = 'WARN_CABIN_OVERHEAT');
+VALUES
+    ('WARN_CABIN_OVERHEAT', '车厢超温预警', 'temperature',
+     '目标温度±2℃', '目标温度+2~4℃', '>目标温度+4℃',
+     '>', 4.0, 3.0, 120,
+     '℃', '车厢制冷效果异常，可能为车门持续开启、蒸发器脏堵、冷媒少量泄漏或控制逻辑异常，请检修',
+     '{"raw_scale": 10, "target_temp": 26.0, "trigger_duration_min": 2, "min_cooling_runtime_min": 20, "trigger_duration_min": 2, "precondition": "no_alarm AND cooling_mode"}'::jsonb)
+ON CONFLICT (warn_code) 
+DO UPDATE SET
+    component_name = EXCLUDED.component_name,
+    category = EXCLUDED.category,
+    threshold_good = EXCLUDED.threshold_good,
+    threshold_normal = EXCLUDED.threshold_normal,
+    threshold_bad = EXCLUDED.threshold_bad,
+    trigger_operator = EXCLUDED.trigger_operator,
+    trigger_value = EXCLUDED.trigger_value,
+    clear_value = EXCLUDED.clear_value,
+    duration_seconds = EXCLUDED.duration_seconds,
+    unit = EXCLUDED.unit,
+    strategy = EXCLUDED.strategy,
+    params = EXCLUDED.params;
 
 -- 3.2 冷媒泄露预警（两个OR条件，params 存子条件）
 INSERT INTO hvac.warning_config
@@ -113,11 +127,11 @@ WHERE NOT EXISTS (SELECT 1 FROM hvac.warning_config WHERE warn_code = 'WARN_COOL
 INSERT INTO hvac.warning_config
     (warn_code, component_name, category, threshold_good, threshold_normal, threshold_bad,
      trigger_operator, trigger_value, clear_value, duration_seconds, unit, strategy, params)
-SELECT 'WARN_TEMP_SENSOR', '新/回风温度传感器预警', 'temperature',
+SELECT 'WARN_TEMP_SENSOR', '车厢/新/回风温度传感器预警', 'temperature',
        '两机组差值<5℃', '5~8℃', '≥8℃',
-       '>', 8.0, 5.0, 300,
+       '>', 8.0, 5.0, 480,
        '℃', '温度传感器可能故障，请现场排查并采用相邻车厢温度值作参考进行异常部件定位',
-       '{"fas_threshold_c": 8.0, "ras_threshold_c": 8.0}'::jsonb
+       '{"raw_scale": 10, "fas_threshold_c": 8.0, "ras_threshold_c": 8.0, "tveh_threshold_c": 8.0}'::jsonb
 WHERE NOT EXISTS (SELECT 1 FROM hvac.warning_config WHERE warn_code = 'WARN_TEMP_SENSOR');
 
 -- 3.5 空调滤网脏堵预警

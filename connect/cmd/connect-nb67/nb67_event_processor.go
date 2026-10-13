@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -632,28 +633,46 @@ func (p *NB67EventProcessor) buildPredictHits(raw map[string]any, carriageID int
 	pm25Thresh := csRawThreshold("WARN_AQ_PM25", 75)
 	pm10Thresh := csRawThreshold("WARN_AQ_PM10", 150)
 	tvocThresh := csRawThreshold("WARN_AQ_TVOC", 600)
-	pmDur := csDuration("WARN_AQ_PM25", 20*time.Minute)
+	pm25Dur := csDuration("WARN_AQ_PM25", 20*time.Minute)
+	pm10Dur := csDuration("WARN_AQ_PM10", 20*time.Minute)
+	pmTvocDur := csDuration("WARN_AQ_TVOC", 20*time.Minute)
 
 	checkAQ := func(uIdx int, name string) {
 		code := hvacCode(base, uIdx+24) // uIdx=1→125, uIdx=2→126
 		fanRunning := rawBool(raw, fmt.Sprintf("CfbkEfU%d1", uIdx))
 		hasBeenRunning := p.checkRule(fanRunning, 20*time.Minute, deviceID, code+"_fanrun", currentTime)
 
+		var triggers []string
+
 		co2Err := hasBeenRunning && rawInt(raw, fmt.Sprintf("AqCo2U%d", uIdx)) > co2Thresh
-		co2Hit := p.checkRule(co2Err, co2Dur, deviceID, code+"_co2", currentTime)
+		if p.checkRule(co2Err, co2Dur, deviceID, code+"_co2", currentTime) {
+			triggers = append(triggers,
+				csTriggerConditionText("WARN_AQ_CO2"))
+		}
 
-		pmTvocErr := hasBeenRunning && (rawInt(raw, fmt.Sprintf("AqPm25U%d", uIdx)) > pm25Thresh ||
-			rawInt(raw, fmt.Sprintf("AqPm10U%d", uIdx)) > pm10Thresh ||
-			rawInt(raw, fmt.Sprintf("AqTvocU%d", uIdx)) > tvocThresh)
-		pmTvocHit := p.checkRule(pmTvocErr, pmDur, deviceID, code+"_pmtvoc", currentTime)
+		// 条件2: PM2.5 / PM10 / TVOC（分别记录哪个超标）
+		pm25Val := rawInt(raw, fmt.Sprintf("AqPm25U%d", uIdx))
+		pm10Val := rawInt(raw, fmt.Sprintf("AqPm10U%d", uIdx))
+		tvocVal := rawInt(raw, fmt.Sprintf("AqTvocU%d", uIdx))
+		pm25Err := hasBeenRunning && pm25Val > pm25Thresh
+		pm10Err := hasBeenRunning && pm10Val > pm10Thresh
+		tvocErr := hasBeenRunning && tvocVal > tvocThresh
+		if p.checkRule(pm25Err, pm25Dur, deviceID, code+"_pm25", currentTime) {
+			triggers = append(triggers,
+				fmt.Sprintf("PM2.5>%dug/m³ 持续%d分钟", pm25Thresh, pm25Dur/time.Minute))
+		}
+		if p.checkRule(pm10Err, pm10Dur, deviceID, code+"_pm10", currentTime) {
+			triggers = append(triggers,
+				fmt.Sprintf("PM10>%dug/m³ 持续%d分钟", pm10Thresh, pm10Dur/time.Minute))
+		}
+		if p.checkRule(tvocErr, pmTvocDur, deviceID, code+"_tvoc", currentTime) {
+			triggers = append(triggers,
+				fmt.Sprintf("TVOC>%dppb 持续%d分钟", tvocThresh, pmTvocDur/time.Minute))
+		}
 
-		if co2Hit || pmTvocHit {
-			snapshot := csTriggerConditionText("WARN_AQ_CO2")
-			if !co2Hit {
-				snapshot = csTriggerConditionText("WARN_AQ_PM25")
-			}
+		if len(triggers) > 0 {
 			hits = append(hits, PredictHit{Code: code, Name: name, Severity: 3,
-				TriggerConditionSnapshot: snapshot})
+				TriggerConditionSnapshot: strings.Join(triggers, " + ")})
 		}
 	}
 	checkAQ(1, "机组1空气质量预警")

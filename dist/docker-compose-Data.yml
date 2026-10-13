@@ -364,8 +364,9 @@ services:
   # 仅订阅 signal-predict, 对每个 device 做状态机 diff, 把状态变化落 hvac.warning_lifecycle。
   # 与 connect-event-writer (Plan A) 并行运行, 不接管 fact_event 写入 (WRITE_FACT_EVENT=false)。
   # 启动时从 warning_lifecycle WHERE end_time IS NULL 拉活跃集合 (lifecycle.Recover), 重启不丢状态。
+  # main.go 根据 KAFKA_TOPICS 条件化创建 writer：未订阅 signal-alarm → 不创建 AlarmLifecycleWriter。
   lifecycle-writer:
-    image: harbor.naivehero.top:8443/macda2/storage-adapter:v2.5.30
+    image: harbor.naivehero.top:8443/macda2/storage-adapter:v2.8.28
     container_name: lifecycle-writer
     restart: unless-stopped
     environment:
@@ -375,6 +376,33 @@ services:
       - PG_DSN=postgres://postgres:passw0rd@timescaledb:5432/postgres?sslmode=disable
       - WRITE_FACT_EVENT=false
       - WRITE_FACT_RAW=false
+      - WARN_SWEEP_TIMEOUT_SEC=43200
+      - WARN_SWEEP_INTERVAL_SEC=300
+      - LOG_LEVEL=INFO
+    depends_on:
+      connect-event-builder:
+        condition: service_healthy
+      timescaledb:
+        condition: service_started
+    networks:
+      - macdanet
+
+  # 告警生命周期写入器：订阅 signal-alarm，做状态机 diff 写 hvac.alarm_lifecycle。
+  # 与 connect-event-writer (Plan A) 并行运行，不接管 fact_event 写入 (WRITE_FACT_EVENT=false)。
+  # main.go 根据 KAFKA_TOPICS 条件化创建 writer：未订阅 signal-predict → 不创建 LifecycleWriter。
+  alarm-lifecycle-writer:
+    image: harbor.naivehero.top:8443/macda2/storage-adapter:v2.8.28
+    container_name: alarm-lifecycle-writer
+    restart: unless-stopped
+    environment:
+      - KAFKA_BROKERS=redpanda-1:9092,redpanda-2:9092,redpanda-3:9092
+      - KAFKA_TOPICS=signal-alarm
+      - KAFKA_GROUP=macda-alarm-lifecycle-writer-v1
+      - PG_DSN=postgres://postgres:passw0rd@timescaledb:5432/postgres?sslmode=disable
+      - WRITE_FACT_EVENT=false
+      - WRITE_FACT_RAW=false
+      - ALARM_SWEEP_TIMEOUT_SEC=300
+      - ALARM_SWEEP_INTERVAL_SEC=300
       - LOG_LEVEL=INFO
     depends_on:
       connect-event-builder:

@@ -94,11 +94,13 @@ type EventRecord struct {
 }
 
 type Hit struct {
-	Code      string    `json:"code"`
-	Name      string    `json:"name"`
-	Severity  int16     `json:"severity"`
-	Level     *int16    `json:"level,omitempty"`
-	EventMeta EventMeta `json:"event_meta"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Severity int16  `json:"severity"`
+	Level    *int16 `json:"level,omitempty"`
+	// 新增：接住 topic 里的触发条件快照
+	TriggerConditionSnapshot string    `json:"trigger_condition_snapshot,omitempty"`
+	EventMeta                EventMeta `json:"event_meta"`
 }
 
 // EventMeta 兼容 nb67 输出的两种数字风格：
