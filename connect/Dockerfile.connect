@@ -7,14 +7,15 @@ RUN apk add --no-cache git
 WORKDIR /build
 
 # 复制go模块文件
-COPY cmd/connect-nb67/go.mod ./
-COPY cmd/connect-nb67/go.sum ./
+COPY go.mod ./
+COPY go.sum ./
 
 # 下载依赖
+ENV GOPROXY=https://goproxy.cn,direct
 RUN go mod download
 
 # 复制源代码
-COPY cmd/connect-nb67/*.go ./
+COPY *.go ./
 
 # 编译二进制（静态编译，避免 Alpine/musl → Debian/glibc 运行时报 "no such file or directory"）
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \

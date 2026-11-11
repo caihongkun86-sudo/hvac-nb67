@@ -176,11 +176,11 @@ main() {
             ;;
         "web")
             build_web
-            push_image "${WEB_IMAGE}"
+            # push_image "${WEB_IMAGE}"
             ;;
         "bff")
             build_bff
-            push_image "${BFF_IMAGE}"
+            # push_image "${BFF_IMAGE}"
             ;;
         "reporter")
             build_reporter
